@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Look At Me!",
+  "version": "0.1.0",
+  "description": "Local AI proctoring MVP for browser security and camera monitoring.",
+  "minimum_chrome_version": "116",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["nativeMessaging", "offscreen", "scripting", "storage", "tabs"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Look At Me! Proctoring",
+    "default_popup": "popup.html"
+  }
+}
