@@ -78,6 +78,22 @@ class LocalEvidenceStoreTests(unittest.TestCase):
                 "image/png",
             )
 
+    def test_deletes_database_row_and_matching_screenshot(self) -> None:
+        saved = self.save("PHONE_DETECTED-delete", "PHONE_DETECTED", 1_791_278_400_000)
+        screenshot = Path(str(saved["screenshotPath"]))
+        self.assertTrue(screenshot.is_file())
+
+        deleted = self.store.delete_violation("PHONE_DETECTED-delete")
+
+        self.assertTrue(deleted["deleted"])
+        self.assertTrue(deleted["screenshotDeleted"])
+        self.assertFalse(screenshot.exists())
+        self.assertEqual(self.store.list_violations(), [])
+
+    def test_delete_missing_violation_is_idempotent(self) -> None:
+        result = self.store.delete_violation("PHONE_DETECTED-missing")
+        self.assertFalse(result["deleted"])
+
 
 if __name__ == "__main__":
     unittest.main()

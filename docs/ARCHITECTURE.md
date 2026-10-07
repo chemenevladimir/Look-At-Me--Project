@@ -9,7 +9,8 @@ Look At Me! collects explainable observations for human review. The Activity Sco
 ```text
 Temporary toolbar popup
   ├─ Start / confirmed Stop
-  └─ read-only session status
+  ├─ read-only session status
+  └─ Open local evidence page
                 │ chrome.runtime messages
                 ▼
 MV3 service worker (single session authority)
@@ -36,7 +37,7 @@ MV3 service worker (single session authority)
                         └─ immediate qualifying-frame event
 ```
 
-The popup is disposable UI. Closing it only disconnects its status port; it does not send a stop command. The service worker persists the canonical session state and event list, while the offscreen document owns the camera tracks and real CV inference. This keeps camera and inference independent from popup mounting and from same-tab page navigation.
+The popup is disposable UI. Closing it only disconnects its status port; it does not send a stop command. The service worker persists the canonical session state and event list, while the offscreen document owns the camera tracks and real CV inference. This keeps camera and inference independent from popup mounting and from same-tab page navigation. The bundled `evidence.html` page is a separate local review surface: it reads and deletes SQLite evidence through validated service-worker messages and never owns the session lifecycle.
 
 The Face Landmarker model, YOLOv8n ONNX model, and their WASM runtimes are copied into the extension bundle. Frames are passed directly from the offscreen document's local `HTMLVideoElement` to both local pipelines and are not uploaded. A single PNG is persisted only after the Event Engine confirms a scored violation; continuous video is not recorded.
 
@@ -110,6 +111,7 @@ The agent observes but does not suppress shortcuts. It omits foreground-window t
 - `src/vision`: model loading, facial geometry, YOLO preprocessing/postprocessing, calibration, smoothing, and temporal state.
 - `src/background/serviceWorker.ts`: canonical session lifecycle, storage, browser events, Native Messaging, Event Engine, and routing.
 - `src/popup`: temporary React popup that reads state and sends explicit start/stop commands.
+- `src/evidenceViewer`: readable local SQLite metadata table with refresh and confirmed row-plus-PNG deletion.
 - `src/content`: current-page overlay, page-level monitoring, and Google Forms confirmation detection.
 - `src/offscreen`: persistent extension document that hosts the camera and CV engine.
 - `src/proctoring`: camera, MediaPipe, YOLO, temporal events, and status reporting independent from popup lifetime.

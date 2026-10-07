@@ -601,6 +601,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   const value = message as Record<string, unknown>;
   if (value.target === 'offscreen') return false;
   const fromOffscreen = sender.url === chrome.runtime.getURL(OFFSCREEN_URL);
+  const fromEvidencePage = sender.url === chrome.runtime.getURL('evidence.html');
 
   void enqueue(async () => {
     await ensureLoaded();
@@ -627,6 +628,16 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     if (value.type === 'popup-camera-preview') {
       if (!isSessionRunning(session.status) || !await hasOffscreenDocument()) return { available: false };
       return sendToOffscreen({ type: 'camera-preview' });
+    }
+    if (value.type === 'evidence-list') {
+      if (!fromEvidencePage) return { error: 'Evidence records are available only to the extension evidence page.' };
+      return nativeRequest({ type: 'storage-list-violations', limit: 1_000 });
+    }
+    if (value.type === 'evidence-delete') {
+      if (!fromEvidencePage) return { error: 'Evidence deletion is available only to the extension evidence page.' };
+      const eventId = safeText(value.eventId, 180);
+      if (!eventId) return { error: 'A valid event ID is required.' };
+      return nativeRequest({ type: 'storage-delete-violation', eventId });
     }
     if (value.type === 'content-ready') {
       if (sender.tab?.id === session.currentTabId && isSessionRunning(session.status)) {

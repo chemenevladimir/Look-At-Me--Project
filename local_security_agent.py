@@ -409,7 +409,13 @@ def run_host(reader: BinaryIO | None = None, writer: BinaryIO | None = None) -> 
                     str(message.get("mimeType") or ""),
                 )
             elif message_type == "storage-list-violations":
-                result = {"violations": store().list_violations(int(message.get("limit") or 100))}
+                evidence_store_instance = store()
+                result = {
+                    **evidence_store_instance.initialize(),
+                    "violations": evidence_store_instance.list_violations(int(message.get("limit") or 100)),
+                }
+            elif message_type == "storage-delete-violation":
+                result = store().delete_violation(str(message.get("eventId") or ""))
             else:
                 raise ValueError(f"Unsupported storage command: {message_type!r}")
             storage_response(message, result)

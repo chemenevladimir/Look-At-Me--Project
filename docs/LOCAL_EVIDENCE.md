@@ -35,6 +35,14 @@ CREATE TABLE violations (
 
 The user-facing relation is intentionally simple: `violation_time` + `violation_type` + `screenshot_name`. `event_id` prevents the same Event Engine event from creating duplicate files, and `session_id` keeps evidence attributable when several sessions share the same database.
 
+## Readable evidence page
+
+The popup button **Открыть базу нарушений** opens the bundled `evidence.html` extension page. The page requests up to 1,000 current rows through the service worker and Native Messaging host, then displays local time, violation type, session ID, and screenshot filename in a normal table. It never parses the binary SQLite file in the browser and does not expose a localhost server.
+
+**Удалить** asks for confirmation and sends the selected `event_id` to the helper. Under an immediate SQLite transaction, the helper moves the matching PNG to a temporary same-directory name, removes the row, commits, and then removes the temporary file. If the database operation fails, it rolls back and restores the PNG. A successful response removes the row from the page immediately. **Обновить** reads SQLite again.
+
+![Evidence viewer](evidence-viewer.png)
+
 ## Capture path
 
 ```text
@@ -64,11 +72,11 @@ pnpm build
 pnpm test:extension-runtime
 ```
 
-The extension runtime smoke starts the actual unpacked MV3 build, closes and reopens the popup, produces a real browser violation, and verifies a non-empty PNG and SQLite file. Use `LOOK_AT_ME_TEST_DATA_DIR` to direct that runtime test to an explicit evidence root.
+The extension runtime smoke starts the actual unpacked MV3 build, closes and reopens the popup, produces real browser violations, verifies non-empty PNG and SQLite files, opens the evidence page, and deletes one record through its real button. The test then verifies that the row disappears from the page and its matching PNG disappears from disk. Use `LOOK_AT_ME_TEST_DATA_DIR` to direct that runtime test to an explicit evidence root. Chrome 137+ branded builds removed automated `--load-extension`; use Chrome for Testing through `LOOK_AT_ME_CHROME` for this automated test.
 
 ## Limits
 
 - Chrome cannot write SQLite or arbitrary Documents files itself, so the registered Native Messaging helper is required.
 - `captureVisibleTab()` requires the manifest's `<all_urls>` host permission. Content-script injection remains restricted to HTTP(S), and protected browser pages are still unavailable.
 - A browser/system screenshot captures Chrome's visible tab, not the Windows desktop or another application.
-- Screenshots are local files. Preview, deletion, retention limits, and cloud synchronization are not implemented in this phase.
+- Screenshots are local files. Inline image preview, filtering, retention limits, and cloud synchronization are not implemented in this phase.

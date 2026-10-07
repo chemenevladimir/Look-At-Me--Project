@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import http from 'node:http';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const rootDir = resolve(import.meta.dirname, '..');
@@ -32,38 +32,44 @@ async function waitFor(work, label, timeoutMs = 30_000) {
   throw new Error(`${label} timed out${lastError ? `: ${lastError.message}` : ''}`);
 }
 
-class CdpClient {
-  constructor(url) {
-    this.socket = new WebSocket(url);
+class PipeCdpClient {
+  constructor(process) {
+    this.writer = process.stdio[3];
+    this.reader = process.stdio[4];
     this.nextId = 1;
     this.pending = new Map();
-    this.opened = new Promise((resolveOpen, rejectOpen) => {
-      this.socket.addEventListener('open', resolveOpen, { once: true });
-      this.socket.addEventListener('error', rejectOpen, { once: true });
-    });
-    this.socket.addEventListener('message', (event) => {
-      const message = JSON.parse(event.data);
-      if (!message.id) return;
-      const pending = this.pending.get(message.id);
-      if (!pending) return;
-      this.pending.delete(message.id);
-      if (message.error) pending.reject(new Error(`${message.error.message} (${message.error.code})`));
-      else pending.resolve(message.result);
+    this.buffer = Buffer.alloc(0);
+    this.opened = Promise.resolve();
+    this.reader.on('data', (chunk) => {
+      this.buffer = Buffer.concat([this.buffer, chunk]);
+      while (true) {
+        const boundary = this.buffer.indexOf(0);
+        if (boundary < 0) break;
+        const payload = this.buffer.subarray(0, boundary).toString('utf8');
+        this.buffer = this.buffer.subarray(boundary + 1);
+        if (!payload) continue;
+        const message = JSON.parse(payload);
+        if (!message.id) continue;
+        const pending = this.pending.get(message.id);
+        if (!pending) continue;
+        this.pending.delete(message.id);
+        if (message.error) pending.reject(new Error(`${message.error.message} (${message.error.code})`));
+        else pending.resolve(message.result);
+      }
     });
   }
 
   async send(method, params = {}, sessionId) {
-    await this.opened;
     const id = this.nextId++;
     const response = new Promise((resolveResponse, rejectResponse) => {
       this.pending.set(id, { resolve: resolveResponse, reject: rejectResponse });
     });
-    this.socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+    this.writer.write(`${JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })}\0`);
     return response;
   }
 
   close() {
-    this.socket.close();
+    this.writer.end();
   }
 }
 
@@ -119,19 +125,21 @@ const chromeArguments = [
   `--disable-extensions-except=${extensionDir}`,
   `--load-extension=${extensionDir}`,
   `--user-data-dir=${profileDir}`,
-  '--remote-debugging-port=0',
+  '--remote-debugging-pipe',
   '--no-first-run',
   '--no-default-browser-check',
   '--disable-background-networking',
+  '--enable-unsafe-extension-debugging',
   '--use-fake-ui-for-media-stream',
   '--autoplay-policy=no-user-gesture-required',
   '--window-size=1280,900',
   'about:blank',
 ];
 if (process.env.LOOK_AT_ME_REAL_CAMERA !== '1') chromeArguments.push('--use-fake-device-for-media-stream');
+if (process.env.LOOK_AT_ME_DISABLE_SANDBOX === '1') chromeArguments.push('--no-sandbox');
 if (process.env.LOOK_AT_ME_HEADFUL !== '1') chromeArguments.unshift('--headless=new');
 const chrome = spawn(chromePath, chromeArguments, {
-  stdio: ['ignore', 'pipe', 'pipe'],
+  stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'],
   windowsHide: true,
   env: { ...process.env, LOOK_AT_ME_DATA_DIR: evidenceRoot },
 });
@@ -145,19 +153,21 @@ for (const stream of [chrome.stdout, chrome.stderr]) {
 
 let client;
 try {
-  const port = await waitFor(async () => {
-    const file = join(profileDir, 'DevToolsActivePort');
-    if (!existsSync(file)) return null;
-    const [value] = (await readFile(file, 'utf8')).split(/\r?\n/);
-    return Number(value) || null;
-  }, 'Chrome DevTools port');
-  const version = await waitFor(async () => {
-    const response = await fetch(`http://127.0.0.1:${port}/json/version`);
-    return response.ok ? response.json() : null;
-  }, 'Chrome DevTools endpoint');
-  client = new CdpClient(version.webSocketDebuggerUrl);
+  client = new PipeCdpClient(chrome);
   await client.opened;
+  await waitFor(() => client.send('Browser.getVersion'), 'Chrome DevTools pipe');
+  const loadedExtension = await client.send('Extensions.loadUnpacked', { path: extensionDir });
+  if (!loadedExtension?.id) throw new Error('Chrome did not return an ID for the unpacked extension.');
+  console.error(`[runtime-smoke] unpacked extension loaded: ${loadedExtension.id}`);
+  const extensionInventory = await client.send('Extensions.getExtensions');
+  console.error(`[runtime-smoke] extensions: ${JSON.stringify(extensionInventory)}`);
+  if (!extensionInventory?.extensions?.some((item) => item.id === loadedExtension.id && item.enabled)) {
+    throw new Error('Chrome rejected the unpacked extension. Set LOOK_AT_ME_CHROME to an official Chrome for Testing executable.');
+  }
   await client.send('Target.setDiscoverTargets', { discover: true });
+  const { targetId: warmExtensionTargetId } = await client.send('Target.createTarget', {
+    url: `chrome-extension://${loadedExtension.id}/evidence.html`,
+  });
 
   let worker;
   let workerSession;
@@ -186,9 +196,17 @@ try {
     }, 'extension service worker');
   } catch (error) {
     const { targetInfos } = await client.send('Target.getTargets');
-    throw new Error(`${error.message}; targets=${JSON.stringify(targetInfos.map(({type,url,title}) => ({type,url,title})))}`);
+    let extensionDiagnostics = '';
+    try {
+      const warmSession = await attach(client, warmExtensionTargetId);
+      extensionDiagnostics = await evaluate(client, warmSession, 'document.body?.innerText || document.documentElement?.outerHTML || ""');
+    } catch (diagnosticError) {
+      extensionDiagnostics = `unavailable: ${diagnosticError.message}`;
+    }
+    throw new Error(`${error.message}; targets=${JSON.stringify(targetInfos.map(({type,url,title}) => ({type,url,title})))}; extensionPage=${JSON.stringify(extensionDiagnostics)}`);
   }
   const extensionId = new URL(worker.url).hostname;
+  await client.send('Target.closeTarget', { targetId: warmExtensionTargetId });
   if (!workerSession) throw new Error('Look At Me! worker had no CDP session.');
   console.error('[runtime-smoke] extension worker ready');
 
@@ -316,6 +334,48 @@ try {
   }
   if (database.size < 100) throw new Error('SQLite database was not written.');
 
+  const { targetId: evidenceTargetId } = await client.send('Target.createTarget', {
+    url: `chrome-extension://${extensionId}/evidence.html`,
+  });
+  const evidenceSession = await attach(client, evidenceTargetId);
+  await waitFor(
+    () => evaluate(client, evidenceSession, 'document.readyState === "complete"'),
+    'evidence viewer load',
+  );
+  const viewerRows = await waitFor(
+    () => evaluate(client, evidenceSession, `(() => {
+      const rows = [...document.querySelectorAll('tbody tr')];
+      return rows.length ? rows.map((row) => ({
+        eventId: row.querySelector('button.delete')?.closest('tr')?.key,
+        screenshotName: row.querySelectorAll('code')[1]?.textContent,
+      })) : null;
+    })()`),
+    'evidence viewer SQLite rows',
+  );
+  const firstViewerScreenshot = viewerRows[0]?.screenshotName;
+  if (!firstViewerScreenshot || !screenshots.includes(firstViewerScreenshot)) {
+    throw new Error(`Evidence viewer did not show a saved screenshot: ${JSON.stringify(viewerRows)}`);
+  }
+  if (process.env.LOOK_AT_ME_VIEWER_SCREENSHOT) {
+    const screenshotPath = resolve(process.env.LOOK_AT_ME_VIEWER_SCREENSHOT);
+    await mkdir(dirname(screenshotPath), { recursive: true });
+    await client.send('Page.enable', {}, evidenceSession);
+    const capturedPage = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true }, evidenceSession);
+    await writeFile(screenshotPath, Buffer.from(capturedPage.data, 'base64'));
+  }
+  await evaluate(client, evidenceSession, `(() => {
+    window.confirm = () => true;
+    document.querySelector('button.delete')?.click();
+  })()`);
+  await waitFor(async () => {
+    const names = await evaluate(client, evidenceSession, `[...document.querySelectorAll('tbody code')].map((node) => node.textContent)`);
+    return !names.includes(firstViewerScreenshot) ? true : null;
+  }, 'evidence viewer deletion');
+  const screenshotsAfterDelete = (await readdir(screenshotsDirectory)).filter((name) => /^image\d+\.png$/.test(name));
+  if (screenshotsAfterDelete.includes(firstViewerScreenshot)) {
+    throw new Error(`Evidence viewer removed the row but left ${firstViewerScreenshot} on disk.`);
+  }
+
   console.log(JSON.stringify({
     extensionId,
     sessionId,
@@ -332,6 +392,9 @@ try {
     stoppedStatus: stopped.status,
     storageStatus: stopped.storageStatus,
     screenshotsOnDisk: screenshots.length,
+    evidenceViewerRows: viewerRows.length,
+    evidenceDeleteVerified: true,
+    screenshotsAfterDelete: screenshotsAfterDelete.length,
     screenshotsDirectory,
     sqlitePath: databasePath,
   }, null, 2));

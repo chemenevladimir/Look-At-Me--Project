@@ -125,6 +125,22 @@ def main() -> int:
                 connection.close()
             if not row or row[1:] != ("PHONE_DETECTED", "image001.png"):
                 raise RuntimeError(f"SQLite violation row is invalid: {row}")
+            listed = request({"type": "storage-list-violations", "limit": 100})
+            violations = listed.get("violations") or []
+            if len(violations) != 1 or violations[0].get("event_id") != event_id:
+                raise RuntimeError(f"Stored violation was not returned by the viewer API: {listed}")
+            deleted = request({"type": "storage-delete-violation", "eventId": event_id})
+            if deleted.get("deleted") is not True or screenshot.exists():
+                raise RuntimeError(f"Violation screenshot was not deleted: {deleted}")
+            connection = sqlite3.connect(database)
+            try:
+                remaining = connection.execute(
+                    "SELECT COUNT(*) FROM violations WHERE event_id=?", (event_id,)
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            if remaining != 0:
+                raise RuntimeError("Deleted violation is still present in SQLite")
         send(process, {"type": "shutdown"})
         return process.wait(timeout=5)
     finally:

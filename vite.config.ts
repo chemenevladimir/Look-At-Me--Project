@@ -19,6 +19,7 @@ export default defineConfig({
       input: {
         popup: resolve(__dirname, 'popup.html'),
         offscreen: resolve(__dirname, 'offscreen.html'),
+        evidence: resolve(__dirname, 'evidence.html'),
       },
       output: {
         entryFileNames: 'assets/[name].js',

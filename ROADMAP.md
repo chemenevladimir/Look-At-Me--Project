@@ -359,10 +359,10 @@ Phase 33. Screenshot-only local evidence policy [x]
 - `Documents\LookAtMeViolations\screenshots\imageNNN.png`;
 - без WebM, session JSON и per-session каталогов.
 
-Phase 34. Evidence Viewer [ ]
+Phase 34. Evidence Viewer [~]
 
-- screenshot preview;
-- event information;
+- [ ] screenshot image preview;
+- [x] readable local SQLite page with violation time, type, session and screenshot filename;
 - confidence;
 - duration.
 
@@ -370,9 +370,9 @@ Phase 35. Evidence Management [~]
 
 - unique IDs;
 - relation event → evidence;
-- deletion;
+- [x] confirmed deletion removes the SQLite row and matching PNG;
 - storage limits;
-- error handling.
+- [x] visible helper/database/deletion error handling.
 
 Проверка BLOCK 7 screenshot storage (2026-10-07):
 
@@ -384,7 +384,10 @@ Phase 35. Evidence Management [~]
 - [x] видеозапись, `tabCapture`, `MediaRecorder`, WebM и JSON-экспорты сессий удалены;
 - [x] popup показывает живой camera preview во время активной сессии и не владеет camera/session lifecycle;
 - [x] `setup_windows.ps1` подготавливает скачанный GitHub checkout и регистрирует helper по фактическому unpacked extension ID;
-- [~] popup показывает последние события и число сохранённых изображений, но отдельный screenshot viewer, filters, deletion и storage limits ещё не реализованы.
+- [x] popup открывает отдельную простую `evidence.html`, которая читает реальные строки SQLite через Native Messaging;
+- [x] Chrome runtime показал 3 строки в viewer, удалил одну кнопкой и подтвердил исчезновение строки и физического PNG;
+- [x] интерфейс viewer визуально проверен в `docs/evidence-viewer.png`;
+- [~] inline PNG preview, filters и storage limits ещё не реализованы.
 
 ---
 
@@ -523,7 +526,7 @@ Current status:
 [x] BLOCK 4 — head/gaze episodes, duration/repetition score and live behavior verified
 [x] BLOCK 5 — real YOLOv8n phone detection, immediate event and overlay verified
 [~] BLOCK 6 — browser/OS/native pipelines, fullscreen и close/reopen последнего `dist` проверены; live Google Forms submit ещё требует ручной проверки
-[~] BLOCK 7 — локальные PNG и SQLite relation реализованы и runtime-проверены; viewer/deletion/storage limits ещё не реализованы
+[~] BLOCK 7 — локальные PNG, SQLite relation, readable viewer и row+PNG deletion runtime-проверены; inline image preview, filters и storage limits ещё не реализованы
 [ ] BLOCK 8
 [ ] BLOCK 9
 [ ] BLOCK 10

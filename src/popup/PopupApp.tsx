@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Camera, CircleAlert, Eye, ShieldCheck, Square, Play, Activity, Database, Maximize } from 'lucide-react';
+import { Camera, CircleAlert, Eye, ShieldCheck, Square, Play, Activity, Database, Maximize, Table2 } from 'lucide-react';
 import { createIdleSessionState, isSessionRunning, type ExtensionSessionState } from '../extension/sessionState';
 import type { ProctorEvent } from '../types';
 import './popup.css';
@@ -236,6 +236,13 @@ export default function PopupApp() {
       <button className={`primary-action ${running ? 'stop' : ''}`} disabled={busy || state.status === 'PROCTORING_FINALIZING'} onClick={handlePrimaryAction}>
         {running ? <Square size={16} /> : <Play size={16} />}
         {busy ? 'Please wait…' : running ? confirmingStop ? 'Confirm Stop' : 'Stop Proctoring' : 'Start Proctoring'}
+      </button>
+
+      <button
+        className="evidence-action"
+        onClick={() => { void chrome.tabs.create({ url: chrome.runtime.getURL('evidence.html') }); }}
+      >
+        <Table2 size={15} /> Открыть базу нарушений
       </button>
 
       <footer>Popup may be closed after start. Camera, CV, and events continue in the current tab.</footer>

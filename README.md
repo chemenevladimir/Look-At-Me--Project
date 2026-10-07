@@ -86,6 +86,8 @@ Documents/
 
 `violations.db` contains one `violations` table. Every saved row includes the exact UTC violation time, event type, and matching screenshot filename, plus event/session IDs used to avoid duplicates. Each PNG shows the test page and the live camera together. The extension does not create WebM files, session JSON exports, or per-session file trees. See `docs/LOCAL_EVIDENCE.md` for the schema and verification commands.
 
+Use **Открыть базу нарушений** in the extension popup to open the readable local evidence page. It shows violation time, type, session, and screenshot filename directly from SQLite. **Удалить** removes both the selected SQLite row and its matching PNG after confirmation; **Обновить** reads the database again. The page remains local to the extension and does not upload evidence.
+
 ## Models and privacy
 
 MediaPipe Face Landmarker runs locally from `public/models/face_landmarker.task` through local WASM files in `public/mediapipe/wasm`. It outputs 478 normalized landmarks for each detected face. Look At Me! derives face count, a calibrated approximate head direction, and an iris-position estimate from those landmarks. Displayed confidence is measurement quality combined with temporal support; MediaPipe Face Landmarker does not expose a raw per-face detection score through this result API.
@@ -103,4 +105,4 @@ See `docs/ARCHITECTURE.md`, `docs/MODELS.md`, and `docs/DECISIONS.md` for the de
 - Browser and local-agent monitoring cannot guarantee complete OS control, intercept the Windows secure desktop, or detect a second physical device outside the camera view.
 - The agent observes protected shortcuts and foreground-process changes; it does not log ordinary typed text and does not block shortcuts.
 - Supabase/cloud synchronization is not configured. Runtime session/events stay in extension storage, while confirmed violation evidence is written only to `Documents\LookAtMeViolations`.
-- Saved screenshot preview/deletion, appeals, teacher dashboard, cloud storage, and Demo Mode remain later roadmap work.
+- Inline screenshot image preview, evidence filters, retention limits, appeals, teacher dashboard, cloud storage, and Demo Mode remain later roadmap work.

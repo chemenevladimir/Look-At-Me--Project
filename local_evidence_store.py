@@ -24,6 +24,7 @@ PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 EVENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,180}$")
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,120}$")
 VIOLATION_TYPE_PATTERN = re.compile(r"^[A-Z0-9_]{1,80}$")
+SCREENSHOT_NAME_PATTERN = re.compile(r"^image[0-9]+\.png$")
 
 
 def default_data_root() -> Path:
@@ -211,6 +212,58 @@ class LocalEvidenceStore:
         finally:
             connection.close()
         return [dict(row) for row in rows]
+
+    def delete_violation(self, event_id: str) -> dict[str, Any]:
+        """Delete one SQLite row and its PNG while keeping both sides consistent."""
+        event_id = _safe_identifier(event_id, EVENT_ID_PATTERN, "event ID")
+        with self._lock:
+            connection = self._connect()
+            screenshot_path: Path | None = None
+            temporary_path: Path | None = None
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    "SELECT screenshot_name FROM violations WHERE event_id=?", (event_id,)
+                ).fetchone()
+                if row is None:
+                    connection.commit()
+                    return {"deleted": False, "eventId": event_id}
+
+                screenshot_name = _safe_identifier(
+                    row["screenshot_name"], SCREENSHOT_NAME_PATTERN, "screenshot filename"
+                )
+                screenshot_path = self.screenshots_root / screenshot_name
+                if screenshot_path.exists():
+                    descriptor, temporary_name = tempfile.mkstemp(
+                        prefix=f".{screenshot_name}.", suffix=".deleting", dir=self.screenshots_root
+                    )
+                    os.close(descriptor)
+                    temporary_path = Path(temporary_name)
+                    temporary_path.unlink(missing_ok=True)
+                    os.replace(screenshot_path, temporary_path)
+
+                connection.execute("DELETE FROM violations WHERE event_id=?", (event_id,))
+                connection.commit()
+                cleanup_error: str | None = None
+                if temporary_path is not None:
+                    try:
+                        temporary_path.unlink(missing_ok=True)
+                    except OSError as error:
+                        cleanup_error = str(error)[:300]
+                return {
+                    "deleted": True,
+                    "eventId": event_id,
+                    "screenshotName": screenshot_name,
+                    "screenshotDeleted": screenshot_path is not None and not screenshot_path.exists(),
+                    "cleanupError": cleanup_error,
+                }
+            except Exception:
+                connection.rollback()
+                if temporary_path is not None and temporary_path.exists() and screenshot_path is not None:
+                    os.replace(temporary_path, screenshot_path)
+                raise
+            finally:
+                connection.close()
 
     def close(self) -> None:
         """Connections are short lived; kept for a stable host lifecycle API."""
