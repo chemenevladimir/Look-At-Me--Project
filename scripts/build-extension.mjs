@@ -48,7 +48,7 @@ await build({
 });
 
 mkdirSync(nativeHostDistDir, { recursive: true });
-for (const file of ['local_security_agent.py', 'requirements-agent.txt']) {
+for (const file of ['local_security_agent.py', 'local_evidence_store.py', 'requirements-agent.txt']) {
   const source = join(rootDir, file);
   if (!existsSync(source)) throw new Error(`Missing ${file} for local security agent package`);
   copyFileSync(source, join(nativeHostDistDir, file));

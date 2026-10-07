@@ -30,6 +30,13 @@ export interface ProctoringEngineCallbacks {
   updateStatus: (status: ProctoringEngineStatus) => void;
 }
 
+export interface CameraEvidenceFrame {
+  data: string;
+  mimeType: 'image/png';
+  width: number;
+  height: number;
+}
+
 type DirectionEventType = 'HEAD_TURN' | 'LOOKING_AWAY';
 
 interface ActiveDirectionEvent {
@@ -118,6 +125,24 @@ export class ProctoringEngine {
 
   public get isActive(): boolean {
     return this.active;
+  }
+
+  public captureFrame(maxWidth = 960): CameraEvidenceFrame | null {
+    if (!this.stream || this.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return null;
+    const sourceWidth = this.video.videoWidth;
+    const sourceHeight = this.video.videoHeight;
+    if (!sourceWidth || !sourceHeight) return null;
+    const scale = Math.min(1, maxWidth / sourceWidth);
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (!context) return null;
+    context.drawImage(this.video, 0, 0, width, height);
+    const url = canvas.toDataURL('image/png');
+    return { data: url.slice(url.indexOf(',') + 1), mimeType: 'image/png', width, height };
   }
 
   public async start(sessionId: string): Promise<void> {

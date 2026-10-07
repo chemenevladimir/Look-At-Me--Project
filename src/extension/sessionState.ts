@@ -13,9 +13,14 @@ export type CameraRuntimeStatus = 'OFF' | 'REQUESTING' | 'ON' | 'ERROR';
 export type FaceRuntimeStatus = 'UNKNOWN' | 'CALIBRATING' | 'DETECTED' | 'NOT_DETECTED' | 'MULTIPLE';
 export type AiRuntimeStatus = 'IDLE' | 'LOADING' | 'ACTIVE' | 'DEGRADED' | 'ERROR';
 export type CloudSyncStatus = 'NOT_CONFIGURED' | 'PENDING' | 'SYNCED' | 'ERROR';
+export type LocalStorageRuntimeStatus = 'IDLE' | 'CONNECTING' | 'READY' | 'SAVING' | 'SAVED' | 'ERROR';
+export type FullscreenRuntimeStatus = 'IDLE' | 'ENTERING' | 'ACTIVE' | 'EXITED' | 'ERROR';
+export type BrowserWindowState = 'normal' | 'fullscreen' | 'minimized' | 'maximized' | 'locked-fullscreen';
 
 export interface ExtensionSessionState {
   sessionId: string | null;
+  studentName: string;
+  testName: string;
   status: ProctoringStatus;
   activityScore: number;
   eventCount: number;
@@ -25,6 +30,7 @@ export interface ExtensionSessionState {
   aiStatus: AiRuntimeStatus;
   proctoringStatus: string;
   currentTabId: number | null;
+  currentWindowId: number | null;
   currentTabUrl: string | null;
   startTime: number | null;
   endTime: number | null;
@@ -32,6 +38,11 @@ export interface ExtensionSessionState {
   lastAlert: string | null;
   localAgentState: 'unavailable' | 'connecting' | 'ready' | 'active' | 'stopped' | 'error';
   localAgentMessage: string;
+  storageStatus: LocalStorageRuntimeStatus;
+  dataRoot: string | null;
+  evidenceCount: number;
+  fullscreenStatus: FullscreenRuntimeStatus;
+  previousWindowState: BrowserWindowState | null;
   cloudSyncStatus: CloudSyncStatus;
   error: string | null;
 }
@@ -41,6 +52,8 @@ export const EVENTS_STORAGE_KEY = 'look-at-me.events';
 
 export const createIdleSessionState = (): ExtensionSessionState => ({
   sessionId: null,
+  studentName: '',
+  testName: '',
   status: 'PROCTORING_IDLE',
   activityScore: 0,
   eventCount: 0,
@@ -50,6 +63,7 @@ export const createIdleSessionState = (): ExtensionSessionState => ({
   aiStatus: 'IDLE',
   proctoringStatus: 'Ready to start in the current tab.',
   currentTabId: null,
+  currentWindowId: null,
   currentTabUrl: null,
   startTime: null,
   endTime: null,
@@ -57,6 +71,11 @@ export const createIdleSessionState = (): ExtensionSessionState => ({
   lastAlert: null,
   localAgentState: 'unavailable',
   localAgentMessage: 'Local Windows agent has not connected yet.',
+  storageStatus: 'IDLE',
+  dataRoot: null,
+  evidenceCount: 0,
+  fullscreenStatus: 'IDLE',
+  previousWindowState: null,
   cloudSyncStatus: 'NOT_CONFIGURED',
   error: null,
 });
@@ -115,8 +134,13 @@ export const sanitizeStoredState = (value: unknown): ExtensionSessionState => {
     eventCount: Math.max(0, Number(candidate.eventCount) || 0),
     severeEventCount: Math.max(0, Number(candidate.severeEventCount) || 0),
     currentTabId: typeof candidate.currentTabId === 'number' ? candidate.currentTabId : null,
+    currentWindowId: typeof candidate.currentWindowId === 'number' ? candidate.currentWindowId : null,
     sessionId: typeof candidate.sessionId === 'string' ? candidate.sessionId.slice(0, 120) : null,
+    studentName: typeof candidate.studentName === 'string' ? candidate.studentName.slice(0, 200) : '',
+    testName: typeof candidate.testName === 'string' ? candidate.testName.slice(0, 240) : '',
     currentTabUrl: typeof candidate.currentTabUrl === 'string' ? candidate.currentTabUrl.slice(0, 2_000) : null,
+    evidenceCount: Math.max(0, Number(candidate.evidenceCount) || 0),
+    dataRoot: typeof candidate.dataRoot === 'string' ? candidate.dataRoot.slice(0, 2_000) : null,
     error: typeof candidate.error === 'string' ? candidate.error.slice(0, 500) : null,
   };
 };

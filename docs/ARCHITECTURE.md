@@ -17,6 +17,7 @@ MV3 service worker (single session authority)
   ├─ tab/window observations
   ├─ unified Event Engine + Activity Score
   ├─ Native Messaging port ──> Python security agent
+  │                              └─ SQLite + PNG evidence writer
   └─ session commands
         ├─> current-tab content script
         │     ├─ Shadow DOM status overlay
@@ -37,7 +38,7 @@ MV3 service worker (single session authority)
 
 The popup is disposable UI. Closing it only disconnects its status port; it does not send a stop command. The service worker persists the canonical session state and event list, while the offscreen document owns the camera tracks and real CV inference. This keeps camera and inference independent from popup mounting and from same-tab page navigation.
 
-The Face Landmarker model, YOLOv8n ONNX model, and their WASM runtimes are copied into the extension bundle. Frames are passed directly from the offscreen document's local `HTMLVideoElement` to both local pipelines and are not uploaded or persisted.
+The Face Landmarker model, YOLOv8n ONNX model, and their WASM runtimes are copied into the extension bundle. Frames are passed directly from the offscreen document's local `HTMLVideoElement` to both local pipelines and are not uploaded. A single PNG is persisted only after the Event Engine confirms a scored violation; continuous video is not recorded.
 
 ## Event Engine
 
@@ -92,9 +93,13 @@ The popup opens a runtime port only while it is visible so status changes can be
 
 Native Messaging is preferred over an unauthenticated localhost port. Messages are UTF-8 JSON preceded by a native-endian 32-bit byte length. On Windows, stdin and stdout are switched to binary mode so newline conversion cannot corrupt the protocol. Heartbeats expose disconnects without inventing events.
 
+Confirmed violations use the same Event Engine objects; there is no second event pipeline. For `source: cv`, the offscreen engine copies the current webcam frame to PNG. For browser/system events, the service worker calls `chrome.tabs.captureVisibleTab()` and saves the returned PNG. The Native Messaging host validates the PNG signature and writes it atomically to `Documents\LookAtMeViolations\screenshots\imageNNN.png`, then commits the matching UTC time, type, and filename to `Documents\LookAtMeViolations\violations.db`. If image or database writing fails, the UI reports a storage error instead of claiming evidence was saved.
+
+The Native Messaging installer copies the host, dependency directory, launcher and manifest to `%LOCALAPPDATA%\LookAtMe\native-host` before registering it under HKCU. The registry never points into `dist`, because the Vite production build replaces that directory and would otherwise break an already registered host.
+
 The Chrome toolbar action uses the normal `action.default_popup` entry point. Starting a session binds it to the current ordinary HTTP(S) tab and injects no new site, tab, or application window. The content script renders a pointer-transparent Shadow DOM overlay on that page. The offscreen document, service worker, and local agent continue after the toolbar popup loses focus.
 
-Static content scripts cover normal navigation. At session start the service worker also probes the selected tab and uses `chrome.scripting.executeScript()` only when no content script is present, which covers a page that was already open when the unpacked extension was loaded or reloaded. This is the reason for the `scripting` permission. Injection is still limited by the HTTP(S) host permissions and Chrome's protected-page rules.
+Static content scripts cover normal navigation. At session start the service worker also probes the selected tab and uses `chrome.scripting.executeScript()` only when no content script is present, which covers a page that was already open when the unpacked extension was loaded or reloaded. This is the reason for the `scripting` permission. Content-script matches remain limited to HTTP(S). The manifest uses `<all_urls>` host permission because Chrome requires that literal permission for `captureVisibleTab()` across ordinary sites; protected Chrome surfaces remain unavailable.
 
 Google Forms completion requires all of the following: an active session in the monitored tab, a fresh submit intent for the same session, a `docs.google.com/forms/.../formResponse` URL, and response-confirmation UI or the absence of question elements in a confirmation container. A random button, blur, refresh, tab close, or popup close cannot finalize the session.
 
@@ -113,4 +118,5 @@ The agent observes but does not suppress shortcuts. It omits foreground-window t
 - `src/lib/storage.ts`: retained IndexedDB storage for the earlier dashboard and future evidence migration; the active extension session currently uses `chrome.storage.local`.
 - `src/components`: retained timeline/dashboard components for later roadmap blocks; they are not an extension entry point in the production bundle.
 - `local_security_agent.py`: real Native Messaging host, protected-shortcut classifier, and Windows foreground-process observer.
+- `local_evidence_store.py`: atomic PNG writer and simple SQLite violation index under the user's Documents folder.
 - `native_host`: current-user install/uninstall scripts and host-manifest template.

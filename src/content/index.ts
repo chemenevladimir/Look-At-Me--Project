@@ -88,6 +88,7 @@ const renderOverlay = (): void => {
         <div class="metric"><label>CAMERA</label><b>${state.cameraStatus}</b></div>
         <div class="metric"><label>FACE</label><b>${state.faceStatus.replace('_', ' ')}</b></div>
         <div class="metric"><label>AI</label><b>${state.aiStatus}</b></div>
+        <div class="metric"><label>SCREENSHOTS</label><b>${state.evidenceCount}</b></div>
       </div>
       ${state.lastAlert ? `<div class="alert">⚠ ${state.lastAlert}</div>` : ''}
       <div class="note">Local analysis · human review required</div>

@@ -8,6 +8,7 @@
     "build": "node ./node_modules/typescript/bin/tsc -b && node ./node_modules/vite/bin/vite.js build && node scripts/build-extension.mjs",
     "preview": "node ./node_modules/vite/bin/vite.js preview --host 0.0.0.0",
     "test": "node ./node_modules/vitest/vitest.mjs run",
+    "test:extension-runtime": "node scripts/test_extension_runtime.mjs",
     "typecheck": "node ./node_modules/typescript/bin/tsc -b --pretty false",
     "build:extension": "node scripts/build-extension.mjs"
   },

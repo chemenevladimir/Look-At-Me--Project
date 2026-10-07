@@ -103,6 +103,7 @@
         <div class="metric"><label>CAMERA</label><b>${state.cameraStatus}</b></div>
         <div class="metric"><label>FACE</label><b>${state.faceStatus.replace("_", " ")}</b></div>
         <div class="metric"><label>AI</label><b>${state.aiStatus}</b></div>
+        <div class="metric"><label>SCREENSHOTS</label><b>${state.evidenceCount}</b></div>
       </div>
       ${state.lastAlert ? `<div class="alert">\u26A0 ${state.lastAlert}</div>` : ""}
       <div class="note">Local analysis \xB7 human review required</div>

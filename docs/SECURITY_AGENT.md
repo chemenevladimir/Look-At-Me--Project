@@ -19,6 +19,11 @@ Windows keyboard / foreground process
   → service worker connectNative()
   → dashboard runtime.Port
   → Event Engine (source: system)
+
+Confirmed violation + PNG
+  → local_security_agent.py
+  → local_evidence_store.py
+  → Documents\LookAtMeViolations\screenshots + violations.db
 ```
 
 The Native Messaging host name is `com.look_at_me.security`. Chrome requires the `nativeMessaging` extension permission, a host manifest with an exact `allowed_origins` extension ID, and a current-user or machine registry entry on Windows.
@@ -50,7 +55,7 @@ The detector keeps only a small pressed-key set in memory to recognize protected
 
 1. Build and load `dist/` as an unpacked Chrome extension.
 2. Copy its 32-character extension ID from `chrome://extensions`.
-3. Register the native host for the current Windows user. The installer places the pinned Python dependency in a private `generated/python-packages` directory; it does not modify global Python packages:
+3. Register the native host for the current Windows user. The installer copies the agent and pinned Python dependency to `%LOCALAPPDATA%\LookAtMe\native-host`; it does not modify global Python packages:
 
    ```powershell
    .\native_host\install_native_host.ps1 `
@@ -60,11 +65,13 @@ The detector keeps only a small pressed-key set in memory to recognize protected
 
 4. Reload the extension. The Security Monitoring panel should report `ready`; starting a session should change it to `active`.
 
-The production build copies the same files to `dist/native-host/`, so installation can be performed from the built package. The installer creates a generated launcher, a private dependency directory, and a manifest beside the script, then writes this current-user registry value:
+The production build copies the installer payload to `dist/native-host/`, so installation can be performed from the built package. The installer copies that payload into a stable per-user directory outside `dist`, creates the launcher, private dependency directory and manifest there, then writes this current-user registry value:
 
 ```text
 HKCU\Software\Google\Chrome\NativeMessagingHosts\com.look_at_me.security
 ```
+
+Keeping the registered manifest outside `dist` is required: Vite uses `emptyOutDir`, so every production build replaces `dist`. Rebuilding the extension therefore no longer deletes the registered host or leaves the registry pointing at a missing file. Re-run the installer after changing the Python agent itself so the stable installed copy is refreshed.
 
 Remove it with:
 
@@ -83,6 +90,9 @@ Commands from the service worker:
 - `stop`;
 - `ping`;
 - `shutdown`.
+- `storage-initialize`;
+- `storage-violation-save` with the existing Event Engine ID/type/timestamp and a PNG payload;
+- `storage-list-violations` for local diagnostics.
 
 Host messages:
 
@@ -90,8 +100,11 @@ Host messages:
 - `status`;
 - `event`;
 - `pong`.
+- `storage-response` correlated by `requestId`.
 
 The service worker allow-lists every accepted event type and truncates strings/metadata before forwarding it to the dashboard. The dashboard validates the payload again before calling Event Engine.
+
+Storage commands do not create a second event model. The helper receives the already-confirmed Event Engine event, validates identifiers and the PNG signature, writes `imageNNN.png` atomically, and commits its UTC time/type/filename relation to SQLite. No video recorder is started.
 
 ## Verified integration
 
@@ -103,6 +116,7 @@ The packaged host was registered and exercised with the installed unpacked Chrom
 python -m unittest discover -s tests -v
 python scripts/test_native_agent.py
 python scripts/test_native_agent.py --exercise-windows
+python scripts/test_native_agent.py --exercise-storage
 ```
 
 The last command requires the `keyboard` package and performs a real hook start/unhook plus foreground-monitor start/stop. It does not synthesize keys or store ordinary keyboard input.

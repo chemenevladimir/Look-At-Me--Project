@@ -41,6 +41,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     });
     return true;
   }
+  if (message.type === 'capture-evidence') {
+    const frame = engine.captureFrame();
+    sendResponse(frame ? { captured: true, frame } : { captured: false, error: 'No current video frame is available.' });
+    return false;
+  }
+  if (message.type === 'camera-preview') {
+    const frame = engine.captureFrame(420);
+    sendResponse(frame ? { available: true, frame } : { available: false });
+    return false;
+  }
   if (message.type === 'engine-health') {
     sendResponse({ active: engine.isActive });
     return false;

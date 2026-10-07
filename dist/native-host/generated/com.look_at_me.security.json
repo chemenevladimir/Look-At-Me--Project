@@ -1,9 +1,0 @@
-{
-  "name": "com.look_at_me.security",
-  "description": "Look At Me! local Windows security observer",
-  "path": "C:\\Users\\мама\\Desktop\\Look-At-Me!-Projject\\dist\\native-host\\generated\\look-at-me-security-host.cmd",
-  "type": "stdio",
-  "allowed_origins": [
-    "chrome-extension://modeenlenlcffbfmgakibilblmckcngb/"
-  ]
-}

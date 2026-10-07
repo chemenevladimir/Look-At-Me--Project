@@ -11,6 +11,7 @@ import ctypes
 import importlib.util
 import json
 import os
+import sqlite3
 import struct
 import sys
 import threading
@@ -19,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, Callable
 from ctypes import wintypes
+
+from local_evidence_store import LocalEvidenceStore
 
 MAX_INBOUND_BYTES = 64 * 1024 * 1024
 MAX_OUTBOUND_BYTES = 1024 * 1024
@@ -31,6 +34,8 @@ CAPABILITIES = [
     "Windows-key observation",
     "Print Screen observation",
     "Foreground application changes",
+    "Local SQLite violation index",
+    "PNG violation screenshots in the user's Documents folder",
 ]
 
 LIMITATIONS = [
@@ -368,7 +373,56 @@ def run_host(reader: BinaryIO | None = None, writer: BinaryIO | None = None) -> 
     output_stream = writer or sys.stdout.buffer
     protocol = NativeMessageIO(input_stream, output_stream)
     agent = SecurityAgent(protocol.send_message)
+    evidence_store: LocalEvidenceStore | None = None
     protocol.send_message(agent.capabilities())
+
+    def store() -> LocalEvidenceStore:
+        nonlocal evidence_store
+        if evidence_store is None:
+            evidence_store = LocalEvidenceStore()
+        return evidence_store
+
+    def storage_response(message: dict[str, Any], result: dict[str, Any] | None = None) -> None:
+        request_id = message.get("requestId")
+        if not isinstance(request_id, str) or not request_id:
+            raise ValueError("Storage command requires requestId.")
+        protocol.send_message({
+            "type": "storage-response",
+            "replyTo": request_id,
+            "ok": True,
+            "result": result or {},
+        })
+
+    def handle_storage(message: dict[str, Any]) -> bool:
+        message_type = message.get("type")
+        if not isinstance(message_type, str) or not message_type.startswith("storage-"):
+            return False
+        request_id = message.get("requestId")
+        try:
+            if message_type == "storage-initialize":
+                result = store().initialize()
+            elif message_type == "storage-violation-save":
+                result = store().save_violation(
+                    str(message.get("sessionId") or ""),
+                    message.get("event") or {},
+                    str(message.get("data") or ""),
+                    str(message.get("mimeType") or ""),
+                )
+            elif message_type == "storage-list-violations":
+                result = {"violations": store().list_violations(int(message.get("limit") or 100))}
+            else:
+                raise ValueError(f"Unsupported storage command: {message_type!r}")
+            storage_response(message, result)
+        except (ValueError, OSError, sqlite3.Error) as error:
+            if not isinstance(request_id, str) or not request_id:
+                raise
+            protocol.send_message({
+                "type": "storage-response",
+                "replyTo": request_id,
+                "ok": False,
+                "error": str(error)[:800],
+            })
+        return True
 
     try:
         while True:
@@ -376,6 +430,8 @@ def run_host(reader: BinaryIO | None = None, writer: BinaryIO | None = None) -> 
             if message is None:
                 break
             message_type = message.get("type")
+            if handle_storage(message):
+                continue
             if message_type == "capabilities":
                 protocol.send_message(agent.capabilities())
             elif message_type == "start":
@@ -394,6 +450,8 @@ def run_host(reader: BinaryIO | None = None, writer: BinaryIO | None = None) -> 
     finally:
         if agent.active:
             agent.stop(notify=False)
+        if evidence_store is not None:
+            evidence_store.close()
     return 0
 
 

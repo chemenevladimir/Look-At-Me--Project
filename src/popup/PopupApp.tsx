@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Camera, CircleAlert, Eye, ShieldCheck, Square, Play, Activity } from 'lucide-react';
+import { Camera, CircleAlert, Eye, ShieldCheck, Square, Play, Activity, Database, Maximize } from 'lucide-react';
 import { createIdleSessionState, isSessionRunning, type ExtensionSessionState } from '../extension/sessionState';
+import type { ProctorEvent } from '../types';
 import './popup.css';
 
-type CommandResponse = { state?: ExtensionSessionState; error?: string };
+type CommandResponse = { state?: ExtensionSessionState; events?: ProctorEvent[]; error?: string };
 
 const sendCommand = async (
   type: string,
@@ -38,6 +39,10 @@ export default function PopupApp() {
   const [confirmingStop, setConfirmingStop] = useState(false);
   const [localError, setLocalError] = useState('');
   const [elapsed, setElapsed] = useState(0);
+  const [studentName, setStudentName] = useState('');
+  const [testName, setTestName] = useState('');
+  const [previewUrl, setPreviewUrl] = useState('');
+  const [events, setEvents] = useState<ProctorEvent[]>([]);
   const running = isSessionRunning(state.status);
 
   useEffect(() => {
@@ -72,6 +77,32 @@ export default function PopupApp() {
     return () => window.clearInterval(timer);
   }, [state.endTime, state.startTime]);
 
+  useEffect(() => {
+    void sendCommand('popup-get-events').then((response) => {
+      if (response.events) setEvents(response.events);
+    });
+  }, [state.eventCount, state.status]);
+
+  useEffect(() => {
+    if (!running || state.cameraStatus !== 'ON') {
+      setPreviewUrl('');
+      return;
+    }
+    let cancelled = false;
+    const updatePreview = async () => {
+      const response = await sendCommand('popup-camera-preview') as CommandResponse & {
+        available?: boolean;
+        frame?: { data?: string; mimeType?: string };
+      };
+      if (!cancelled && response.available && response.frame?.data) {
+        setPreviewUrl(`data:${response.frame.mimeType || 'image/png'};base64,${response.frame.data}`);
+      }
+    };
+    void updatePreview();
+    const timer = window.setInterval(() => { void updatePreview(); }, 1_200);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [running, state.cameraStatus]);
+
   const duration = useMemo(() => {
     const minutes = Math.floor(elapsed / 60).toString().padStart(2, '0');
     const seconds = (elapsed % 60).toString().padStart(2, '0');
@@ -86,7 +117,10 @@ export default function PopupApp() {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera API is unavailable in this Chrome popup.');
       const permissionStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       permissionStream.getTracks().forEach((track) => track.stop());
-      const response = await sendCommand('popup-start');
+      const response = await sendCommand('popup-start', {
+        studentName: studentName.trim() || 'Student',
+        testName: testName.trim() || undefined,
+      });
       if (response.error) throw new Error(response.error);
       if (response.state) setState(response.state);
     } catch (error) {
@@ -143,11 +177,28 @@ export default function PopupApp() {
         <div className="score-meta"><Activity size={15} /> {state.eventCount} events · {duration}</div>
       </section>
 
+      {previewUrl && (
+        <section className="camera-preview">
+          <img src={previewUrl} alt="Live local camera preview" />
+          <span><i /> LIVE CAMERA</span>
+        </section>
+      )}
+
+      {!running && state.status !== 'PROCTORING_FINALIZING' && (
+        <section className="session-fields">
+          <label>Student<input value={studentName} onChange={(event) => setStudentName(event.target.value)} placeholder="Student name" /></label>
+          <label>Test<input value={testName} onChange={(event) => setTestName(event.target.value)} placeholder="Current site / test" /></label>
+        </section>
+      )}
+
       <section className="runtime-grid">
         <div><Camera size={15} /><span>Camera</span><b>{state.cameraStatus}</b></div>
         <div><Eye size={15} /><span>Face</span><b>{state.faceStatus.replace('_', ' ')}</b></div>
         <div><ShieldCheck size={15} /><span>AI</span><b>{state.aiStatus}</b></div>
         <div><ShieldCheck size={15} /><span>OS Agent</span><b>{state.localAgentState.toUpperCase()}</b></div>
+        <div><Database size={15} /><span>Screenshots</span><b>{state.storageStatus}</b></div>
+        <div><Maximize size={15} /><span>Fullscreen</span><b>{state.fullscreenStatus}</b></div>
+        <div><Activity size={15} /><span>Saved images</span><b>{state.evidenceCount}</b></div>
       </section>
 
       <section className="target-card">
@@ -160,6 +211,27 @@ export default function PopupApp() {
         <div className="popup-error"><CircleAlert size={16} /><span>{localError || state.error}</span></div>
       )}
       {state.lastAlert && <div className="popup-alert">⚠ {state.lastAlert}</div>}
+
+      {events.length > 0 && (
+        <section className="event-list">
+          <div className="event-list-title"><span>RECENT EVENTS</span><b>{events.length}</b></div>
+          {events.slice(0, 5).map((event) => (
+            <div className="event-row" key={event.id}>
+              <i className={event.severity >= 6 ? 'high' : event.severity >= 3 ? 'medium' : ''} />
+              <div><b>{event.type.replace(/_/g, ' ')}</b><span>{new Date(event.timestamp).toLocaleTimeString()} · {Math.round(event.confidence * 100)}%</span></div>
+              <strong>+{event.scoreImpact}</strong>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {state.status === 'PROCTORING_COMPLETED' && (
+        <section className="saved-checklist">
+          <b>✓ Тест завершён</b>
+          <span>✓ Скриншоты нарушений сохранены: {state.evidenceCount}</span>
+          <span>✓ База нарушений обновлена</span>
+        </section>
+      )}
 
       <button className={`primary-action ${running ? 'stop' : ''}`} disabled={busy || state.status === 'PROCTORING_FINALIZING'} onClick={handlePrimaryAction}>
         {running ? <Square size={16} /> : <Play size={16} />}

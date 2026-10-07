@@ -65,3 +65,15 @@
 **Decision:** The service worker owns a long-lived `connectNative('com.look_at_me.security')` port with handshake, capabilities, heartbeat, start/stop, event, error, and shutdown messages.
 
 **Reason:** Chrome registers the allowed extension origin and transports framed messages over stdio. This avoids exposing an unauthenticated network port and keeps the host unavailable to unrelated web pages.
+
+## ADR-012: Install the native host outside the build directory
+
+**Decision:** Copy the packaged Python host, pinned dependency, launcher and Native Messaging manifest to `%LOCALAPPDATA%\LookAtMe\native-host`, and point the current-user registry entry at that stable manifest.
+
+**Reason:** Vite intentionally replaces `dist` on every production build. Registering a manifest under `dist/native-host/generated` made a successful rebuild silently invalidate Chrome's Native Messaging registration. A stable per-user installation keeps build output disposable while preserving the registered runtime.
+
+## ADR-013: Store screenshot-only evidence in Documents
+
+**Decision:** Do not record full-session or short-event video. For every confirmed scored violation, save one real PNG to `Documents\LookAtMeViolations\screenshots\imageNNN.png` and insert the violation time, type, and image filename into `Documents\LookAtMeViolations\violations.db`. Keep the Event Engine as the only event source and use the Native Messaging host for file/SQLite access.
+
+**Reason:** The owner explicitly removed video recording and the earlier per-session JSON/WebM layout. Chrome extensions cannot write arbitrary local files or SQLite directly. A small native helper provides durable local evidence without cloud services, while one screenshot per confirmed event limits storage and preserves an explainable event-to-image relation.

@@ -23,8 +23,10 @@ Look At Me! is a local, explainable AI-proctoring prototype for browser-based as
 - Camera, MediaPipe, and YOLO run in an extension offscreen document and continue independently after the toolbar popup closes.
 - Google Forms finalization requires a fresh submit intent plus a confirmed `/formResponse` completion state for the active session.
 - Windows local security observer for Ctrl+C/V, Alt+Tab, Windows key, Print Screen, and foreground-process changes through Native Messaging.
+- Screenshot-only violation evidence: confirmed CV violations save a real camera frame, while browser/system violations save the visible Chrome tab.
+- A simple local SQLite index links violation time and type to sequential PNG names such as `image001.png`. No test video is recorded.
 
-Blocks 4 and 5 remain verified complete. Live head/gaze episodes, duration scoring, physical-phone detection, confidence, and immediate `PHONE_DETECTED` were exercised on the current Windows setup. The installed Chrome-to-Native-Messaging-to-Python route and an installed-session start with real camera, MediaPipe, and YOLO were also exercised. The final popup-close/reopen regression and live Google Forms completion still need one manual pass after loading the latest `dist`, so the affected extension and Block 6 statuses remain `[~]` in the roadmap.
+Blocks 4 and 5 remain verified complete. Live head/gaze episodes, duration scoring, physical-phone detection, confidence, and immediate `PHONE_DETECTED` were exercised on the current Windows setup. The installed Chrome-to-Native-Messaging-to-Python route, popup close/reopen persistence, fullscreen entry, real camera/CV state, and physical PNG/SQLite evidence were exercised on the latest `dist`. A live Google Forms completion check is still open, so Block 6 remains `[~]` in the roadmap.
 
 ## Commands
 
@@ -64,7 +66,23 @@ Native Messaging registration needs the concrete 32-character ID assigned by Chr
 
 4. Reload the unpacked extension and start monitoring. The Security Monitoring panel must change the local-agent state from `connecting` to `ready` and then `active`.
 
-The installer puts `keyboard==0.13.5` into a private directory beside the native host and does not alter global Python packages. The production build places the complete agent package under `dist/native-host/`. Registration writes only the current-user `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.look_at_me.security` key. Remove it with `uninstall_native_host.ps1`. See `docs/SECURITY_AGENT.md` for the protocol, tests, supported signals, and limitations.
+The installer copies the host and `keyboard==0.13.5` into `%LOCALAPPDATA%\LookAtMe\native-host` and does not alter global Python packages. The production build places the installer payload under `dist/native-host/`; rebuilding `dist` no longer deletes the registered host. Registration writes only the current-user `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.look_at_me.security` key. Remove it with `uninstall_native_host.ps1`. See `docs/SECURITY_AGENT.md` for the protocol, tests, supported signals, and limitations.
+
+## Local violation evidence
+
+The helper creates this layout automatically when proctoring starts:
+
+```text
+Documents/
+└── LookAtMeViolations/
+    ├── violations.db
+    └── screenshots/
+        ├── image001.png
+        ├── image002.png
+        └── ...
+```
+
+`violations.db` contains one `violations` table. Every saved row includes the exact UTC violation time, event type, and matching screenshot filename, plus event/session IDs used to avoid duplicates. The extension does not create WebM files, session JSON exports, or per-session file trees. See `docs/LOCAL_EVIDENCE.md` for the schema and verification commands.
 
 ## Models and privacy
 
@@ -76,11 +94,11 @@ See `docs/ARCHITECTURE.md`, `docs/MODELS.md`, and `docs/DECISIONS.md` for the de
 
 ## Current limitations
 
-- The latest `dist` still needs a final manual close/reopen pass in installed Chrome and a live Google Forms submit check; unit tests cover the confirmation rules, but do not replace a real form submission.
+- A live Google Forms submit check remains open; unit tests cover the confirmation rules, but do not replace a real form submission.
 - Native Messaging registration is local to the Windows user and exact Chrome extension ID. Reinstall the host if the unpacked extension receives a different ID or is moved to another package/profile.
 - Head/gaze and phone behavior is verified on the current setup; broader multi-user lighting, glasses, camera-angle, phone-distance and occlusion validation is still desirable.
 - Approximate gaze is not eye tracking and cannot identify an exact point on screen.
 - Browser and local-agent monitoring cannot guarantee complete OS control, intercept the Windows secure desktop, or detect a second physical device outside the camera view.
 - The agent observes protected shortcuts and foreground-process changes; it does not log ordinary typed text and does not block shortcuts.
-- Supabase/cloud synchronization is not configured in the current block. Completed sessions and events stay local and report `NOT_CONFIGURED` rather than pretending an upload occurred.
-- Evidence, appeals, teacher dashboard, cloud storage, and Demo Mode belong to later roadmap blocks.
+- Supabase/cloud synchronization is not configured. Runtime session/events stay in extension storage, while confirmed violation evidence is written only to `Documents\LookAtMeViolations`.
+- Saved screenshot preview/deletion, appeals, teacher dashboard, cloud storage, and Demo Mode remain later roadmap work.

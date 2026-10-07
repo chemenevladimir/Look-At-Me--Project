@@ -309,7 +309,7 @@ Phase 30C. In-tab MV3 Session Architecture [~]
 - content script показывает Shadow DOM overlay внутри текущей HTTP(S)-вкладки;
 - закрытие popup не отправляет stop и не уничтожает camera/CV;
 - Google Forms завершает сессию только после fresh submit intent и подтверждённого `/formResponse`;
-- требуется финальный installed-Chrome close/reopen smoke и live Google Forms submit на последнем `dist`.
+- installed-Chrome close/reopen smoke выполнен; требуется live Google Forms submit на последнем `dist`.
 
 Проверка BLOCK 6 (2026-10-05):
 
@@ -327,15 +327,15 @@ Phase 30C. In-tab MV3 Session Architecture [~]
 - [x] browser copy observation created `COPY_ATTEMPT`, fullscreen exit and session stop remained visible and recoverable;
 - [x] старая dedicated-window схема удалена из production manifest/build; action использует `default_popup`, а `dist` не содержит `index.html`;
 - [x] installed Chrome session запустила реальную camera + MediaPipe + YOLO через offscreen architecture, popup показал `ACTIVE`, а Native Messaging agent перешёл в active state;
-- [~] после финальной защиты Stop двойным подтверждением требуется повторить close popup → wait → reopen same session на последнем `dist`;
+- [x] latest `dist`: close popup → wait → reopen сохранил тот же `sessionId`, ACTIVE camera/CV/native-agent state и fullscreen;
 - [~] Google Forms rules покрыты unit-тестами, но live submit реальной формы ещё не выполнен;
 - [x] finishing the integration session stopped the camera/browser route and returned the local agent to `stopped` without leaving monitoring active.
 
 ---
 
-BLOCK 7. EVIDENCE AND TIMELINE
+BLOCK 7. EVIDENCE AND TIMELINE [~]
 
-Phase 31. Timeline UI
+Phase 31. Timeline UI [~]
 
 - chronological events;
 - filters;
@@ -343,35 +343,46 @@ Phase 31. Timeline UI
 - timestamps;
 - event details.
 
-Phase 32. Evidence Capture
+Phase 32. Evidence Capture [x]
 
 - screenshot;
 - event metadata;
 - timestamp;
 - evidence relation.
 
-Phase 33. Short Video Evidence
+Phase 33. Screenshot-only local evidence policy [x]
 
-- MediaRecorder;
-- short clips;
-- pre/post event window при технической возможности;
-- local storage.
+- полная и короткая видеозапись отменена прямым решением владельца проекта;
+- один реальный PNG на подтверждённое значимое нарушение;
+- CV event → camera frame;
+- browser/system event → visible-tab frame;
+- `Documents\LookAtMeViolations\screenshots\imageNNN.png`;
+- без WebM, session JSON и per-session каталогов.
 
-Phase 34. Evidence Viewer
+Phase 34. Evidence Viewer [ ]
 
 - screenshot preview;
-- video preview;
 - event information;
 - confidence;
 - duration.
 
-Phase 35. Evidence Management
+Phase 35. Evidence Management [~]
 
 - unique IDs;
 - relation event → evidence;
 - deletion;
 - storage limits;
 - error handling.
+
+Проверка BLOCK 7 screenshot storage (2026-10-07):
+
+- [x] один существующий Event Engine остаётся источником CV/browser/system нарушений;
+- [x] real runtime создал PNG camera evidence для `FACE_NOT_DETECTED` и visible-tab PNG для `TAB_SWITCH` / `WINDOW_BLUR`;
+- [x] сохранённый PNG визуально проверен: 800×544, текущая тестовая вкладка, Look At Me! overlay и `TAB SWITCH` alert;
+- [x] SQLite физически создан и содержит UTC-время, тип и точное имя `image001.png` / `image002.png` / `image003.png`;
+- [x] повторное сохранение одного `event_id` не создаёт дубликат, новые нарушения получают следующий номер;
+- [x] видеозапись, `tabCapture`, `MediaRecorder`, WebM и JSON-экспорты сессий удалены;
+- [~] popup показывает последние события и число сохранённых изображений, но отдельный screenshot viewer, filters, deletion и storage limits ещё не реализованы.
 
 ---
 
@@ -504,13 +515,13 @@ DEVELOPMENT STATUS
 
 Current status:
 
-[~] BLOCK 1 — MV3 popup/service-worker/content/offscreen skeleton собран и установлен; требуется финальный close/reopen smoke последнего `dist`
+[~] BLOCK 1 — MV3 popup/service-worker/content/offscreen skeleton собран и installed close/reopen проверен; Phase 2/5 остаются `[~]` до более широкой browser/device матрицы
 [x] BLOCK 2 — Event Engine/scoring покрыты unit-тестами; IndexedDB restoration подтверждён перезагрузкой browser preview
 [~] BLOCK 3 — реальный MediaPipe и temporal pipeline работают на реальной камере; требуется матрица порогов для разных пользователей/условий
 [x] BLOCK 4 — head/gaze episodes, duration/repetition score and live behavior verified
 [x] BLOCK 5 — real YOLOv8n phone detection, immediate event and overlay verified
-[~] BLOCK 6 — browser/OS/native pipelines проверены; in-tab refactor реализован, но final close/reopen и live Google Forms submit требуют ручной проверки последнего `dist`
-[ ] BLOCK 7
+[~] BLOCK 6 — browser/OS/native pipelines, fullscreen и close/reopen последнего `dist` проверены; live Google Forms submit ещё требует ручной проверки
+[~] BLOCK 7 — локальные PNG и SQLite relation реализованы и runtime-проверены; viewer/deletion/storage limits ещё не реализованы
 [ ] BLOCK 8
 [ ] BLOCK 9
 [ ] BLOCK 10
@@ -557,7 +568,18 @@ Verification record for the in-tab MV3 refactor (2026-10-05):
 - JavaScript syntax checks for background/content/popup/offscreen bundles — passed;
 - production bundle contains no `index.html`; MediaPipe/ORT resources and YOLOv8n are packaged; source/dist YOLO SHA-256 matches;
 - native host was reinstalled after the final build for extension ID `modeenlenlcffbfmgakibilblmckcngb`;
-- final installed-Chrome close/reopen and live Google Forms submission remain `[~]` and are not claimed as completed.
+- installed-Chrome close/reopen is now verified by the 2026-10-07 runtime smoke; live Google Forms submission remains `[~]` and is not claimed as completed.
+
+Verification record for local screenshot evidence (2026-10-07):
+
+- `pnpm typecheck` — passed;
+- Vitest — 9 files, 32 tests passed;
+- Python unittest — 7 tests passed, including PNG validation, sequential naming, deduplication and SQLite relation;
+- Native Messaging `--exercise-storage` — passed for source host and registered host;
+- production build — passed; manifest no longer includes `tabCapture`, and no MediaRecorder module is bundled;
+- installed Chrome-for-Testing runtime — passed: same active session after popup close/reopen, camera `ON`, AI `ACTIVE`, native agent `active`, fullscreen `ACTIVE`, final status `COMPLETED`;
+- runtime created three non-empty valid PNG files and `violations.db` directly in `C:\Users\мама\Documents\LookAtMeViolations`; SQLite integrity was `ok`, and physical rows linked `FACE_NOT_DETECTED`, `TAB_SWITCH`, and `WINDOW_BLUR` to `image001.png`–`image003.png`;
+- live Google Forms submit remains unverified and keeps Block 6 at `[~]`.
 
 ---
 

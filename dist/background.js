@@ -53,6 +53,8 @@
   var EVENTS_STORAGE_KEY = "look-at-me.events";
   var createIdleSessionState = () => ({
     sessionId: null,
+    studentName: "",
+    testName: "",
     status: "PROCTORING_IDLE",
     activityScore: 0,
     eventCount: 0,
@@ -62,6 +64,7 @@
     aiStatus: "IDLE",
     proctoringStatus: "Ready to start in the current tab.",
     currentTabId: null,
+    currentWindowId: null,
     currentTabUrl: null,
     startTime: null,
     endTime: null,
@@ -69,6 +72,11 @@
     lastAlert: null,
     localAgentState: "unavailable",
     localAgentMessage: "Local Windows agent has not connected yet.",
+    storageStatus: "IDLE",
+    dataRoot: null,
+    evidenceCount: 0,
+    fullscreenStatus: "IDLE",
+    previousWindowState: null,
     cloudSyncStatus: "NOT_CONFIGURED",
     error: null
   });
@@ -111,8 +119,13 @@
       eventCount: Math.max(0, Number(candidate.eventCount) || 0),
       severeEventCount: Math.max(0, Number(candidate.severeEventCount) || 0),
       currentTabId: typeof candidate.currentTabId === "number" ? candidate.currentTabId : null,
+      currentWindowId: typeof candidate.currentWindowId === "number" ? candidate.currentWindowId : null,
       sessionId: typeof candidate.sessionId === "string" ? candidate.sessionId.slice(0, 120) : null,
+      studentName: typeof candidate.studentName === "string" ? candidate.studentName.slice(0, 200) : "",
+      testName: typeof candidate.testName === "string" ? candidate.testName.slice(0, 240) : "",
       currentTabUrl: typeof candidate.currentTabUrl === "string" ? candidate.currentTabUrl.slice(0, 2e3) : null,
+      evidenceCount: Math.max(0, Number(candidate.evidenceCount) || 0),
+      dataRoot: typeof candidate.dataRoot === "string" ? candidate.dataRoot.slice(0, 2e3) : null,
       error: typeof candidate.error === "string" ? candidate.error.slice(0, 500) : null
     };
   };
@@ -292,6 +305,20 @@
     }
   };
 
+  // src/evidence/localEvidence.ts
+  var nonViolationTypes = /* @__PURE__ */ new Set([
+    "FACE_DETECTED",
+    "SESSION_STARTED",
+    "SESSION_FINISHED",
+    "FORM_SUBMITTED"
+  ]);
+  var shouldCaptureScreenshot = (event) => event.scoreImpact > 0 && !nonViolationTypes.has(event.type);
+  var serializeViolation = (event) => ({
+    id: event.id,
+    type: event.type,
+    timestamp: event.timestamp
+  });
+
   // src/background/serviceWorker.ts
   var NATIVE_HOST = "com.look_at_me.security";
   var POPUP_PORT = "look-at-me-popup";
@@ -312,6 +339,13 @@
   var mutationQueue = Promise.resolve();
   var nativePort = null;
   var popupConnections = 0;
+  var fullscreenRecoveryTimer = null;
+  var nativeRequests = /* @__PURE__ */ new Map();
+  var evidenceTasks = /* @__PURE__ */ new Set();
+  var sessionFailures = [];
+  var registerSessionFailure = (message) => {
+    if (!sessionFailures.includes(message)) sessionFailures = [...sessionFailures, message].slice(-20);
+  };
   var enqueue = (work) => {
     const result = mutationQueue.then(work, work);
     mutationQueue = result.then(() => void 0, () => void 0);
@@ -328,6 +362,25 @@
     }
     return Object.keys(output).length ? output : void 0;
   };
+  var makeSessionId = (now = /* @__PURE__ */ new Date()) => {
+    const parts = [
+      now.getUTCFullYear().toString(),
+      (now.getUTCMonth() + 1).toString().padStart(2, "0"),
+      now.getUTCDate().toString().padStart(2, "0"),
+      "_",
+      now.getUTCHours().toString().padStart(2, "0"),
+      now.getUTCMinutes().toString().padStart(2, "0"),
+      now.getUTCSeconds().toString().padStart(2, "0")
+    ].join("");
+    return `session_${parts}_${crypto.randomUUID().slice(0, 8)}`;
+  };
+  async function hasOffscreenDocument() {
+    const contexts = await chrome.runtime.getContexts({
+      contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
+      documentUrls: [chrome.runtime.getURL(OFFSCREEN_URL)]
+    });
+    return contexts.length > 0;
+  }
   async function ensureLoaded() {
     if (loaded) return;
     if (loadPromise) return loadPromise;
@@ -376,11 +429,59 @@
     }
     await sendStateToContent();
   }
+  async function captureEvidenceForEvent(event, sessionId) {
+    try {
+      let frame;
+      if (event.source === "cv") {
+        if (!await hasOffscreenDocument()) throw new Error("The offscreen camera context is unavailable.");
+        const response = await sendToOffscreen({ type: "capture-evidence" });
+        if (!response.captured || !response.frame?.data || response.frame.mimeType !== "image/png") {
+          throw new Error(response.error || "No camera frame was returned.");
+        }
+        frame = { data: response.frame.data, mimeType: "image/png" };
+      } else {
+        if (session.currentWindowId === null) throw new Error("The monitored Chrome window is unavailable.");
+        const dataUrl = await chrome.tabs.captureVisibleTab(session.currentWindowId, { format: "png" });
+        const prefix = "data:image/png;base64,";
+        if (!dataUrl.startsWith(prefix)) throw new Error("Chrome returned an unsupported screenshot format.");
+        frame = { data: dataUrl.slice(prefix.length), mimeType: "image/png" };
+      }
+      const result = await nativeRequest({
+        type: "storage-violation-save",
+        sessionId,
+        event: serializeViolation(event),
+        data: frame.data,
+        mimeType: frame.mimeType
+      });
+      if (session.sessionId === sessionId) {
+        session = {
+          ...session,
+          evidenceCount: session.evidenceCount + (result.alreadyExisted === true ? 0 : 1),
+          storageStatus: "READY",
+          dataRoot: safeText(result.dataRoot, 2e3) ?? session.dataRoot
+        };
+        await broadcastState();
+      }
+    } catch (error) {
+      if (session.sessionId === sessionId) {
+        const message = `Evidence screenshot could not be saved: ${error instanceof Error ? error.message : String(error)}`;
+        registerSessionFailure(message);
+        session = { ...session, storageStatus: "ERROR", error: message };
+        await broadcastState();
+      }
+    }
+  }
   async function recordEventInternal(input) {
     const event = engine.record(input);
     if (!event) return null;
     session = applySummary(session, engine.summarize(), event);
     await broadcastState();
+    if (shouldCaptureScreenshot(event) && session.sessionId) {
+      const sessionId = session.sessionId;
+      const task = new Promise((resolve) => setTimeout(resolve, 0)).then(() => captureEvidenceForEvent(event, sessionId));
+      evidenceTasks.add(task);
+      void task.finally(() => evidenceTasks.delete(task));
+    }
     return event;
   }
   async function updateEventInternal(id, update) {
@@ -391,20 +492,40 @@
     return event;
   }
   async function ensureOffscreenDocument() {
-    if (await chrome.offscreen.hasDocument()) return;
+    if (await hasOffscreenDocument()) return;
     await chrome.offscreen.createDocument({
       url: OFFSCREEN_URL,
       reasons: [chrome.offscreen.Reason.USER_MEDIA],
       justification: "Keep local webcam inference active after the temporary extension popup closes."
     });
   }
+  function withTimeout(promise, timeoutMs, message) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        }
+      );
+    });
+  }
   async function sendToOffscreen(message) {
     let lastError;
     for (let attempt = 0; attempt < 12; attempt += 1) {
       try {
-        return await chrome.runtime.sendMessage({ target: "offscreen", ...message });
+        return await withTimeout(
+          chrome.runtime.sendMessage({ target: "offscreen", ...message }),
+          15e3,
+          "Offscreen operation timed out."
+        );
       } catch (error) {
         lastError = error;
+        if (error instanceof Error && error.message === "Offscreen operation timed out.") throw error;
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
     }
@@ -421,18 +542,40 @@
     if (!nativePort) return;
     const port = nativePort;
     nativePort = null;
+    for (const [id, pending] of nativeRequests) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error("The local Native Messaging host disconnected."));
+      nativeRequests.delete(id);
+    }
     try {
       if (sendShutdown) port.postMessage({ type: "shutdown" });
       port.disconnect();
     } catch {
     }
   }
+  function nativeRequest(message, timeoutMs = 2e4) {
+    connectNativeAgent();
+    const port = nativePort;
+    if (!port) return Promise.reject(new Error("The local evidence helper is unavailable."));
+    const requestId = crypto.randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        nativeRequests.delete(requestId);
+        reject(new Error(`Local helper timed out while handling ${String(message.type)}.`));
+      }, timeoutMs);
+      nativeRequests.set(requestId, { resolve, reject, timer });
+      try {
+        port.postMessage({ ...message, requestId });
+      } catch (error) {
+        clearTimeout(timer);
+        nativeRequests.delete(requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
   function connectNativeAgent(forceRestart = false) {
     if (forceRestart) disconnectNativeAgent();
-    if (nativePort) {
-      nativePort.postMessage({ type: isSessionRunning(session.status) ? "start" : "capabilities", sessionId: session.sessionId });
-      return;
-    }
+    if (nativePort) return;
     emitAgentStatus("connecting", "Connecting to the registered Windows security host\u2026");
     try {
       const port = chrome.runtime.connectNative(NATIVE_HOST);
@@ -440,7 +583,14 @@
       port.onMessage.addListener((message) => {
         if (!message || typeof message !== "object") return;
         const value = message;
-        if (value.type === "ready" || value.type === "status") {
+        if (value.type === "storage-response" && typeof value.replyTo === "string") {
+          const pending = nativeRequests.get(value.replyTo);
+          if (!pending) return;
+          nativeRequests.delete(value.replyTo);
+          clearTimeout(pending.timer);
+          if (value.ok === true) pending.resolve(value.result ?? {});
+          else pending.reject(new Error(safeText(value.error, 800) ?? "The local evidence helper rejected the request."));
+        } else if (value.type === "ready" || value.type === "status") {
           const rawState = safeText(value.state, 32) ?? (value.type === "ready" ? "ready" : "error");
           const allowed = /* @__PURE__ */ new Set(["unavailable", "connecting", "ready", "active", "stopped", "error"]);
           emitAgentStatus(
@@ -466,6 +616,11 @@
       port.onDisconnect.addListener(() => {
         if (nativePort !== port) return;
         nativePort = null;
+        for (const [id, pending] of nativeRequests) {
+          clearTimeout(pending.timer);
+          pending.reject(new Error("The local Native Messaging host disconnected."));
+          nativeRequests.delete(id);
+        }
         const reason = chrome.runtime.lastError?.message ?? "Native host closed the connection.";
         emitAgentStatus("unavailable", `Local security agent unavailable: ${reason}`);
       });
@@ -475,26 +630,62 @@
       emitAgentStatus("error", `Local security agent could not start: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  async function startSession() {
+  async function enterFullscreen(windowId) {
+    session = { ...session, fullscreenStatus: "ENTERING" };
+    try {
+      const updated = await chrome.windows.update(windowId, { state: "fullscreen", focused: true });
+      session = {
+        ...session,
+        fullscreenStatus: updated.state === "fullscreen" ? "ACTIVE" : "ERROR"
+      };
+    } catch (error) {
+      session = {
+        ...session,
+        fullscreenStatus: "ERROR",
+        error: `Fullscreen could not be enabled: ${error instanceof Error ? error.message : String(error)}`
+      };
+    }
+  }
+  async function restoreWindowState() {
+    if (fullscreenRecoveryTimer !== null) {
+      clearTimeout(fullscreenRecoveryTimer);
+      fullscreenRecoveryTimer = null;
+    }
+    if (session.currentWindowId === null) return;
+    const targetState = session.previousWindowState === "maximized" ? "maximized" : "normal";
+    try {
+      await chrome.windows.update(session.currentWindowId, { state: targetState });
+    } catch {
+    }
+  }
+  async function startSession(options) {
     await ensureLoaded();
     if (isSessionRunning(session.status)) return session;
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab.id === void 0 || !isMonitorableUrl(tab.url)) {
       throw new Error("Open an ordinary http:// or https:// page before starting proctoring. Chrome system pages are not accessible.");
     }
+    const browserWindow = await chrome.windows.get(tab.windowId);
     engine.clear();
     events = [];
+    sessionFailures = [];
     const now = Date.now();
     session = {
       ...createIdleSessionState(),
-      sessionId: `session-${now}`,
+      sessionId: makeSessionId(new Date(now)),
+      studentName: safeText(options.studentName, 200)?.trim() || "Student",
+      testName: safeText(options.testName, 240)?.trim() || new URL(tab.url).hostname,
       status: "PROCTORING_STARTING",
       cameraStatus: "REQUESTING",
       aiStatus: "LOADING",
-      proctoringStatus: "Starting proctoring in the current tab\u2026",
+      proctoringStatus: "Preparing local violation screenshots and AI monitoring\u2026",
       currentTabId: tab.id,
+      currentWindowId: tab.windowId,
       currentTabUrl: tab.url,
-      startTime: now
+      startTime: now,
+      storageStatus: "CONNECTING",
+      fullscreenStatus: "ENTERING",
+      previousWindowState: browserWindow.state ?? "normal"
     };
     try {
       await ensureContentScript(tab.id);
@@ -514,12 +705,40 @@
     await broadcastState();
     connectNativeAgent();
     try {
+      const storage = await nativeRequest({
+        type: "storage-initialize"
+      });
+      session = {
+        ...session,
+        storageStatus: "READY",
+        dataRoot: safeText(storage.dataRoot, 2e3) ?? null
+      };
       await ensureOffscreenDocument();
+      session = { ...session, proctoringStatus: "Starting camera and local AI models\u2026" };
+      await enterFullscreen(tab.windowId);
+      await broadcastState();
       await sendToOffscreen({ type: "engine-start", sessionId: session.sessionId });
     } catch (error) {
       const message = `Proctoring engine could not start: ${error instanceof Error ? error.message : String(error)}`;
-      session = { ...session, status: "PROCTORING_ERROR", cameraStatus: "ERROR", aiStatus: "ERROR", proctoringStatus: message, error: message };
+      session = {
+        ...session,
+        status: "PROCTORING_ERROR",
+        cameraStatus: "ERROR",
+        aiStatus: "ERROR",
+        storageStatus: session.storageStatus === "READY" ? "ERROR" : session.storageStatus,
+        proctoringStatus: message,
+        error: message
+      };
+      try {
+        if (await hasOffscreenDocument()) {
+          await sendToOffscreen({ type: "engine-stop" });
+        }
+      } catch {
+      }
       await broadcastState();
+      await restoreWindowState();
+      nativePort?.postMessage({ type: "stop", sessionId: session.sessionId });
+      if (await hasOffscreenDocument()) await chrome.offscreen.closeDocument();
     }
     return session;
   }
@@ -529,7 +748,8 @@
     session = {
       ...session,
       status: "PROCTORING_FINALIZING",
-      proctoringStatus: reason === "google-forms" ? "Google Forms submission confirmed. Finalizing the local session\u2026" : "Finalizing the local session\u2026"
+      storageStatus: "SAVING",
+      proctoringStatus: reason === "google-forms" ? "Google Forms submission confirmed. Finalizing the local session\u2026" : reason === "interrupted" ? "The monitored test was interrupted. Finalizing local evidence\u2026" : "Finalizing the local session\u2026"
     };
     await broadcastState();
     if (reason === "google-forms") {
@@ -542,36 +762,45 @@
         source: "browser"
       });
     }
-    try {
-      if (await chrome.offscreen.hasDocument()) await sendToOffscreen({ type: "engine-stop" });
-    } catch (error) {
-      session = { ...session, error: `CV shutdown warning: ${error instanceof Error ? error.message : String(error)}` };
-    }
-    nativePort?.postMessage({ type: "stop", sessionId: session.sessionId });
     const endedAt = Date.now();
     await recordEventInternal({
       type: "SESSION_FINISHED",
       duration: Math.max(0, endedAt - (session.startTime ?? endedAt)),
       confidence: 1,
       severity: 0,
-      explanation: reason === "google-forms" ? "The local proctoring session finished after confirmed Google Forms submission." : "The local proctoring session was stopped from the extension popup.",
+      explanation: reason === "google-forms" ? "The local proctoring session finished after confirmed Google Forms submission." : reason === "interrupted" ? "The monitored test tab was closed before a confirmed submission." : reason === "error" ? "The local proctoring session stopped after a runtime error." : "The local proctoring session was stopped from the extension popup.",
       source: "system"
     });
+    await Promise.allSettled([...evidenceTasks]);
+    let finalStatus = reason === "error" || sessionFailures.length ? "ERROR" : reason === "interrupted" ? "INTERRUPTED" : "COMPLETED";
+    const warnings = [...sessionFailures];
+    if (reason === "error" && session.error && !warnings.includes(session.error)) warnings.push(session.error);
+    try {
+      if (await hasOffscreenDocument()) await sendToOffscreen({ type: "engine-stop" });
+    } catch (error) {
+      warnings.push(`CV shutdown warning: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    session = { ...session, storageStatus: finalStatus === "ERROR" ? "ERROR" : "SAVED" };
+    nativePort?.postMessage({ type: "stop", sessionId: session.sessionId });
+    session = { ...session, fullscreenStatus: "IDLE" };
+    await restoreWindowState();
     session = {
       ...session,
-      status: "PROCTORING_COMPLETED",
+      status: finalStatus === "COMPLETED" ? "PROCTORING_COMPLETED" : "PROCTORING_ERROR",
       cameraStatus: "OFF",
       faceStatus: "UNKNOWN",
       aiStatus: "IDLE",
-      proctoringStatus: "Session completed and saved locally.",
+      proctoringStatus: finalStatus === "COMPLETED" ? "Session completed. Violation screenshots and their SQLite index were saved locally." : finalStatus === "INTERRUPTED" ? "The interrupted session ended; available violation screenshots remain saved locally." : "Session ended with a local screenshot storage or runtime error.",
       endTime: endedAt,
       cloudSyncStatus: "NOT_CONFIGURED",
       lastAlert: null,
       localAgentState: "stopped",
-      localAgentMessage: "Local security agent stopped with the completed session."
+      localAgentMessage: "Local security agent stopped with the completed session.",
+      fullscreenStatus: "IDLE",
+      error: warnings.length ? warnings.join(" ") : null
     };
     await broadcastState();
-    if (await chrome.offscreen.hasDocument()) await chrome.offscreen.closeDocument();
+    if (await hasOffscreenDocument()) await chrome.offscreen.closeDocument();
     disconnectNativeAgent();
     return session;
   }
@@ -626,7 +855,15 @@
     void enqueue(async () => {
       await ensureLoaded();
       if (value.type === "popup-get-state") return { state: session };
-      if (value.type === "popup-start") return { state: await startSession() };
+      if (value.type === "popup-get-events") return { events: engine.getEvents().slice(0, 12) };
+      if (value.type === "popup-start") {
+        return {
+          state: await startSession({
+            studentName: safeText(value.studentName, 200),
+            testName: safeText(value.testName, 240)
+          })
+        };
+      }
       if (value.type === "popup-stop") {
         if (value.confirmed !== true) {
           return { state: session, error: "Stopping an active session requires explicit confirmation." };
@@ -636,6 +873,10 @@
       if (value.type === "popup-retry-agent") {
         connectNativeAgent(true);
         return { state: session };
+      }
+      if (value.type === "popup-camera-preview") {
+        if (!isSessionRunning(session.status) || !await hasOffscreenDocument()) return { available: false };
+        return sendToOffscreen({ type: "camera-preview" });
       }
       if (value.type === "content-ready") {
         if (sender.tab?.id === session.currentTabId && isSessionRunning(session.status)) {
@@ -685,12 +926,11 @@
       if (value.target === "background" && value.type === "engine-fatal-error") {
         if (!fromOffscreen) return { accepted: false, error: "untrusted-engine-sender" };
         const error = safeText(value.message) ?? "Unknown proctoring engine failure.";
-        session = { ...session, status: "PROCTORING_ERROR", cameraStatus: "ERROR", aiStatus: "ERROR", error, proctoringStatus: error };
-        await broadcastState();
-        return { accepted: true };
+        session = { ...session, cameraStatus: "ERROR", aiStatus: "ERROR", error, proctoringStatus: error };
+        return { accepted: true, state: await finalizeSession("error") };
       }
       if (value.type === "service-worker-health-check") {
-        return { ok: true, state: session, nativeConnected: Boolean(nativePort), offscreen: await chrome.offscreen.hasDocument() };
+        return { ok: true, state: session, nativeConnected: Boolean(nativePort), offscreen: await hasOffscreenDocument() };
       }
       return { ignored: true };
     }).then(sendResponse).catch((error) => sendResponse({ error: error instanceof Error ? error.message : String(error) }));
@@ -727,12 +967,11 @@
         type: "TAB_SWITCH",
         duration: 0,
         confidence: 1,
-        explanation: "The monitored test tab was closed. The session remains active until an explicit stop or confirmed submission.",
+        explanation: "The monitored test tab was closed before a confirmed submission.",
         source: "browser",
         metadata: { closedTabId: tabId }
       });
-      session = { ...session, currentTabId: null, currentTabUrl: null, proctoringStatus: "Test tab closed; camera monitoring remains active." };
-      await broadcastState();
+      await finalizeSession("interrupted");
     });
   });
   chrome.windows.onFocusChanged.addListener((windowId) => {
@@ -748,6 +987,42 @@
           source: "browser"
         });
       }
+    });
+  });
+  chrome.windows.onBoundsChanged.addListener((changedWindow) => {
+    void enqueue(async () => {
+      await ensureLoaded();
+      const enforce = session.status === "PROCTORING_STARTING" || session.status === "PROCTORING_ACTIVE" || session.status === "PROCTORING_PAUSED";
+      if (!enforce || changedWindow.id !== session.currentWindowId) return;
+      if (changedWindow.state === "fullscreen") {
+        if (session.fullscreenStatus !== "ACTIVE") {
+          session = { ...session, fullscreenStatus: "ACTIVE" };
+          await broadcastState();
+        }
+        return;
+      }
+      if (session.fullscreenStatus !== "ACTIVE") return;
+      session = { ...session, fullscreenStatus: "EXITED" };
+      await recordEventInternal({
+        type: "FULLSCREEN_EXIT",
+        duration: 0,
+        confidence: 1,
+        severity: 5,
+        explanation: "The monitored Chrome window left fullscreen. Look At Me! is restoring fullscreen mode.",
+        source: "browser",
+        metadata: { windowId: changedWindow.id, observedState: changedWindow.state ?? "unknown" }
+      });
+      if (fullscreenRecoveryTimer !== null) clearTimeout(fullscreenRecoveryTimer);
+      fullscreenRecoveryTimer = setTimeout(() => {
+        fullscreenRecoveryTimer = null;
+        void enqueue(async () => {
+          const stillActive = session.status === "PROCTORING_STARTING" || session.status === "PROCTORING_ACTIVE" || session.status === "PROCTORING_PAUSED";
+          if (stillActive && session.currentWindowId === changedWindow.id) {
+            await enterFullscreen(changedWindow.id);
+            await broadcastState();
+          }
+        });
+      }, 900);
     });
   });
   chrome.runtime.onInstalled.addListener(() => {
