@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Camera, CircleAlert, Eye, ShieldCheck, Square, Play, Activity, Database, Maximize, Table2 } from 'lucide-react';
+import { Camera, CircleAlert, Eye, Square, Play, Activity, Database, Table2, WifiOff } from 'lucide-react';
 import { createIdleSessionState, isSessionRunning, type ExtensionSessionState } from '../extension/sessionState';
 import type { ProctorEvent } from '../types';
 import './popup.css';
@@ -14,13 +14,13 @@ const sendCommand = async (
 
 const statusLabel = (state: ExtensionSessionState): string => {
   switch (state.status) {
-    case 'PROCTORING_STARTING': return 'STARTING';
-    case 'PROCTORING_ACTIVE': return 'ACTIVE';
-    case 'PROCTORING_PAUSED': return 'PAUSED';
-    case 'PROCTORING_FINALIZING': return 'FINALIZING';
+    case 'PROCTORING_STARTING': return 'TESTING';
+    case 'PROCTORING_ACTIVE': return 'TESTING';
+    case 'PROCTORING_PAUSED': return 'TESTING';
+    case 'PROCTORING_FINALIZING': return 'FINISHING';
     case 'PROCTORING_COMPLETED': return 'COMPLETED';
     case 'PROCTORING_ERROR': return 'ERROR';
-    default: return 'READY';
+    default: return state.localAgentState === 'ready' || state.localAgentState === 'stopped' ? 'READY' : 'NOT READY';
   }
 };
 
@@ -36,7 +36,6 @@ const siteLabel = (urlValue: string | null): string => {
 export default function PopupApp() {
   const [state, setState] = useState<ExtensionSessionState>(createIdleSessionState());
   const [busy, setBusy] = useState(false);
-  const [confirmingStop, setConfirmingStop] = useState(false);
   const [localError, setLocalError] = useState('');
   const [elapsed, setElapsed] = useState(0);
   const [studentName, setStudentName] = useState('');
@@ -99,7 +98,7 @@ export default function PopupApp() {
       }
     };
     void updatePreview();
-    const timer = window.setInterval(() => { void updatePreview(); }, 1_200);
+    const timer = window.setInterval(() => { void updatePreview(); }, 350);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [running, state.cameraStatus]);
 
@@ -114,9 +113,6 @@ export default function PopupApp() {
     setBusy(true);
     setLocalError('');
     try {
-      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera API is unavailable in this Chrome popup.');
-      const permissionStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      permissionStream.getTracks().forEach((track) => track.stop());
       const response = await sendCommand('popup-start', {
         studentName: studentName.trim() || 'Student',
         testName: testName.trim() || undefined,
@@ -132,10 +128,17 @@ export default function PopupApp() {
 
   const stop = async () => {
     if (busy || !running) return;
+    if (!window.confirm('Вы действительно хотите завершить тест?')) return;
     setBusy(true);
     setLocalError('');
     try {
-      const response = await sendCommand('popup-stop', { confirmed: true });
+      const responsePromise = sendCommand('popup-stop', { confirmed: true });
+      // The action popup is a temporary Chrome surface. Close it after the
+      // command has been dispatched so captureVisibleTab records the monitored
+      // test page rather than the popup itself. The service worker owns and
+      // completes finalization after this document is gone.
+      window.setTimeout(() => window.close(), 75);
+      const response = await responsePromise;
       if (response.error) throw new Error(response.error);
       if (response.state) setState(response.state);
     } catch (error) {
@@ -145,22 +148,12 @@ export default function PopupApp() {
     }
   };
 
-  useEffect(() => {
-    if (!confirmingStop) return;
-    const timer = window.setTimeout(() => setConfirmingStop(false), 5_000);
-    return () => window.clearTimeout(timer);
-  }, [confirmingStop]);
-
   const handlePrimaryAction = () => {
     if (!running) {
-      void start();
+      if (state.localAgentState === 'ready' || state.localAgentState === 'stopped') void start();
+      else void sendCommand('popup-retry-agent');
       return;
     }
-    if (!confirmingStop) {
-      setConfirmingStop(true);
-      return;
-    }
-    setConfirmingStop(false);
     void stop();
   };
 
@@ -174,7 +167,7 @@ export default function PopupApp() {
 
       <section className="score-card">
         <div><span>Activity Score</span><strong>{state.activityScore}<small>/200</small></strong></div>
-        <div className="score-meta"><Activity size={15} /> {state.eventCount} events · {duration}</div>
+        <div className="score-meta"><Activity size={15} /> {state.eventCount} событий · серьёзных: {state.severeEventCount} · {duration}</div>
       </section>
 
       {previewUrl && (
@@ -193,12 +186,9 @@ export default function PopupApp() {
 
       <section className="runtime-grid">
         <div><Camera size={15} /><span>Camera</span><b>{state.cameraStatus}</b></div>
+        <div><Database size={15} /><span>Helper</span><b>{state.localAgentState === 'unavailable' ? 'OFFLINE' : state.localAgentState.toUpperCase()}</b></div>
         <div><Eye size={15} /><span>Face</span><b>{state.faceStatus.replace('_', ' ')}</b></div>
-        <div><ShieldCheck size={15} /><span>AI</span><b>{state.aiStatus}</b></div>
-        <div><ShieldCheck size={15} /><span>OS Agent</span><b>{state.localAgentState.toUpperCase()}</b></div>
-        <div><Database size={15} /><span>Screenshots</span><b>{state.storageStatus}</b></div>
-        <div><Maximize size={15} /><span>Fullscreen</span><b>{state.fullscreenStatus}</b></div>
-        <div><Activity size={15} /><span>Saved images</span><b>{state.evidenceCount}</b></div>
+        <div><Activity size={15} /><span>Скриншоты</span><b>{state.evidenceCount}</b></div>
       </section>
 
       <section className="target-card">
@@ -229,21 +219,34 @@ export default function PopupApp() {
         <section className="saved-checklist">
           <b>✓ Тест завершён</b>
           <span>✓ Скриншоты нарушений сохранены: {state.evidenceCount}</span>
+          <span>✓ Финальный скриншот: {state.finalScreenshotName || 'сохранён'}</span>
           <span>✓ База нарушений обновлена</span>
         </section>
       )}
 
       <button className={`primary-action ${running ? 'stop' : ''}`} disabled={busy || state.status === 'PROCTORING_FINALIZING'} onClick={handlePrimaryAction}>
-        {running ? <Square size={16} /> : <Play size={16} />}
-        {busy ? 'Please wait…' : running ? confirmingStop ? 'Confirm Stop' : 'Stop Proctoring' : 'Start Proctoring'}
+        {running
+          ? <Square size={16} />
+          : state.localAgentState === 'ready' || state.localAgentState === 'stopped'
+            ? <Play size={16} />
+            : <WifiOff size={16} />}
+        {busy
+          ? 'Пожалуйста, подождите…'
+          : running
+            ? 'Завершить тест'
+            : state.localAgentState === 'ready' || state.localAgentState === 'stopped'
+              ? 'Начать тест'
+              : 'Повторить подключение helper'}
       </button>
 
-      <button
-        className="evidence-action"
-        onClick={() => { void chrome.tabs.create({ url: chrome.runtime.getURL('evidence.html') }); }}
-      >
-        <Table2 size={15} /> Открыть базу нарушений
-      </button>
+      {!running && state.status !== 'PROCTORING_FINALIZING' && (
+        <button
+          className="evidence-action"
+          onClick={() => { void chrome.tabs.create({ url: chrome.runtime.getURL('evidence.html') }); }}
+        >
+          <Table2 size={15} /> Открыть базу нарушений
+        </button>
+      )}
 
       <footer>Popup may be closed after start. Camera, CV, and events continue in the current tab.</footer>
     </main>

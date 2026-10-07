@@ -23,7 +23,7 @@ Windows keyboard / foreground process
 Confirmed violation + PNG
   → local_security_agent.py
   → local_evidence_store.py
-  → Documents\LookAtMeViolations\screenshots + violations.db
+  → Documents\LookAtMe\screenshots + database.db
 ```
 
 The Native Messaging host name is `com.look_at_me.security`. Chrome requires the `nativeMessaging` extension permission, a host manifest with an exact `allowed_origins` extension ID, and a current-user or machine registry entry on Windows.
@@ -49,7 +49,7 @@ The detector keeps only a small pressed-key set in memory to recognize protected
 - Some Windows-reserved shortcuts may be consumed before a user-level hook receives them.
 - Window titles are disabled by default because they can contain personal document names or messages.
 - Another physical device remains outside the system boundary.
-- Chrome Native Messaging requires registration after the final unpacked extension ID is known.
+- Chrome Native Messaging requires an exact allowed extension origin. `setup_windows.ps1` discovers the ID whose stored unpacked path matches this checkout's `dist`; it also accepts any valid ID explicitly, so the project is not tied to one developer-machine ID.
 
 ## Installation
 

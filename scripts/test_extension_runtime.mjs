@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import http from 'node:http';
@@ -92,9 +92,6 @@ async function attach(client, targetId) {
 }
 
 async function clickPrimary(client, popupSessionId) {
-  const { targetInfos } = await client.send('Target.getTargets');
-  const popupTarget = targetInfos.find((item) => item.url?.endsWith('/popup.html'));
-  if (popupTarget) await client.send('Target.activateTarget', { targetId: popupTarget.targetId });
   const point = await evaluate(client, popupSessionId, `(() => {
     const button = document.querySelector('button.primary-action');
     if (!button) return null;
@@ -120,6 +117,21 @@ const profileDir = await mkdtemp(join(tmpdir(), 'look-at-me-chrome-'));
 const evidenceRoot = process.env.LOOK_AT_ME_TEST_DATA_DIR
   ? resolve(process.env.LOOK_AT_ME_TEST_DATA_DIR)
   : await mkdtemp(join(tmpdir(), 'look-at-me-violations-'));
+const exerciseHelperRecovery = process.env.LOOK_AT_ME_TEST_HELPER_RECOVERY === '1';
+const helperRecoveryOnly = process.env.LOOK_AT_ME_HELPER_RECOVERY_ONLY === '1';
+const nativeRegistryKey = 'HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.look_at_me.security';
+const originalNativeManifest = process.env.LOOK_AT_ME_NATIVE_MANIFEST || '';
+const setNativeManifest = (manifestPath) => {
+  const result = spawnSync('reg.exe', ['add', nativeRegistryKey, '/ve', '/t', 'REG_SZ', '/d', manifestPath, '/f'], {
+    windowsHide: true,
+    encoding: 'utf8',
+  });
+  if (result.status !== 0) throw new Error(`Could not update Native Messaging registry: ${result.stderr || result.stdout}`);
+};
+if (exerciseHelperRecovery) {
+  if (!originalNativeManifest) throw new Error('LOOK_AT_ME_NATIVE_MANIFEST is required for helper recovery testing.');
+  setNativeManifest(join(profileDir, 'missing-native-host.json'));
+}
 const chromeArguments = [
   '--enable-extensions',
   `--disable-extensions-except=${extensionDir}`,
@@ -206,8 +218,42 @@ try {
     throw new Error(`${error.message}; targets=${JSON.stringify(targetInfos.map(({type,url,title}) => ({type,url,title})))}; extensionPage=${JSON.stringify(extensionDiagnostics)}`);
   }
   const extensionId = new URL(worker.url).hostname;
-  await client.send('Target.closeTarget', { targetId: warmExtensionTargetId });
   if (!workerSession) throw new Error('Look At Me! worker had no CDP session.');
+  const evaluateWorker = async (expression) => {
+    try {
+      return await evaluate(client, workerSession, expression);
+    } catch (error) {
+      if (!/No SW|session|target/i.test(error.message)) throw error;
+      const wake = await client.send('Target.createTarget', { url: `chrome-extension://${extensionId}/evidence.html` });
+      const wakeSession = await attach(client, wake.targetId);
+      await waitFor(() => evaluate(client, wakeSession, 'document.readyState === "complete"'), 'extension context fallback');
+      try {
+        return await evaluate(client, wakeSession, expression);
+      } finally {
+        await client.send('Target.closeTarget', { targetId: wake.targetId });
+      }
+    }
+  };
+  let helperRecoveryVerified = false;
+  if (exerciseHelperRecovery) {
+    const warmSession = await attach(client, warmExtensionTargetId);
+    await waitFor(async () => {
+      const body = await evaluate(client, warmSession, 'document.body.innerText');
+      return /Helper:\s*Offline|Helper недоступен/i.test(body) ? true : null;
+    }, 'explicit helper offline UI', 15_000);
+    setNativeManifest(originalNativeManifest);
+    await evaluate(client, warmSession, `document.querySelector('button.refresh')?.click()`);
+    await waitFor(async () => {
+      const body = await evaluate(client, warmSession, 'document.body.innerText');
+      return /Helper:\s*Online/i.test(body) ? true : null;
+    }, 'automatic helper recovery UI', 15_000);
+    helperRecoveryVerified = true;
+  }
+  await client.send('Target.closeTarget', { targetId: warmExtensionTargetId });
+  if (helperRecoveryOnly && helperRecoveryVerified) {
+    console.log(JSON.stringify({ extensionId, helperOfflineUiVerified: true, helperRecoveryVerified: true }, null, 2));
+    throw new Error('__LOOK_AT_ME_HELPER_RECOVERY_ONLY_PASSED__');
+  }
   console.error('[runtime-smoke] extension worker ready');
 
   const { targetId: pageTargetId } = await client.send('Target.createTarget', {
@@ -243,21 +289,29 @@ try {
     );
     return { targetId, sessionId };
   };
+  const openPopupPage = async () => {
+    const { targetId } = await client.send('Target.createTarget', {
+      url: `chrome-extension://${extensionId}/popup.html`,
+      background: true,
+    });
+    const sessionId = await attach(client, targetId);
+    await waitFor(() => evaluate(client, sessionId, 'document.readyState === "complete"'), 'popup page load');
+    return { targetId, sessionId };
+  };
 
   let popup = await openPopup();
   console.error('[runtime-smoke] action popup opened');
-  await client.send('Target.activateTarget', { targetId: pageTargetId });
+  await waitFor(async () => {
+    const label = await evaluate(client, popup.sessionId, 'document.querySelector("button.primary-action")?.textContent || ""');
+    return /Начать тест/i.test(label) ? true : null;
+  }, 'popup ready state', 15_000);
   await clickPrimary(client, popup.sessionId);
   console.error('[runtime-smoke] start clicked');
 
   let activeState;
   try {
     activeState = await waitFor(async () => {
-      const stored = await evaluate(
-        client,
-        workerSession,
-        'chrome.storage.local.get("look-at-me.session")',
-      );
+      const stored = await evaluateWorker('chrome.storage.local.get("look-at-me.session")');
       const current = stored?.['look-at-me.session'];
       if (current?.status === 'PROCTORING_ERROR') {
         throw new Error(current.error || current.proctoringStatus || 'Unknown runtime error');
@@ -265,8 +319,9 @@ try {
       return current?.status === 'PROCTORING_ACTIVE' ? current : null;
     }, 'active proctoring session', 60_000);
   } catch (error) {
-    const stored = await evaluate(client, workerSession, 'chrome.storage.local.get("look-at-me.session")');
-    const popupText = await evaluate(client, popup.sessionId, 'document.body.innerText');
+    const stored = await evaluateWorker('chrome.storage.local.get("look-at-me.session")');
+    let popupText = 'popup target closed';
+    try { popupText = await evaluate(client, popup.sessionId, 'document.body.innerText'); } catch { /* fullscreen closes the action popup */ }
     throw new Error(`${error.message}; stored=${JSON.stringify(stored)}; popup=${JSON.stringify(popupText)}`);
   }
   const sessionId = activeState.sessionId;
@@ -281,11 +336,12 @@ try {
   if (activeState.fullscreenStatus !== 'ACTIVE') {
     throw new Error(`Chrome window did not enter fullscreen: ${activeState.fullscreenStatus}`);
   }
-  await client.send('Target.closeTarget', { targetId: popup.targetId });
+  try { await client.send('Target.closeTarget', { targetId: popup.targetId }); } catch { /* fullscreen may already close the popup */ }
   await delay(1_000);
 
-  popup = await openPopup();
-  const restored = await evaluate(client, workerSession, 'chrome.storage.local.get("look-at-me.session")');
+  popup = await openPopupPage();
+  await client.send('Target.activateTarget', { targetId: pageTargetId });
+  const restored = await evaluateWorker('chrome.storage.local.get("look-at-me.session")');
   if (restored?.['look-at-me.session']?.sessionId !== sessionId || restored?.['look-at-me.session']?.status !== 'PROCTORING_ACTIVE') {
     throw new Error(`Popup reopen lost the active session: ${JSON.stringify(restored)}`);
   }
@@ -294,8 +350,10 @@ try {
     'popup live camera preview',
   );
 
-  const contexts = await evaluate(client, workerSession, 'chrome.runtime.getContexts({contextTypes:["OFFSCREEN_DOCUMENT"]})');
+  const contexts = await evaluateWorker('chrome.runtime.getContexts({contextTypes:["OFFSCREEN_DOCUMENT"]})');
   if (!contexts?.length) throw new Error('Offscreen document is not active after popup reopen.');
+  await client.send('Target.closeTarget', { targetId: popup.targetId });
+  await client.send('Target.activateTarget', { targetId: pageTargetId });
 
   await delay(2_200);
   const { targetId: distractorTargetId } = await client.send('Target.createTarget', {
@@ -303,31 +361,60 @@ try {
   });
   await client.send('Target.activateTarget', { targetId: distractorTargetId });
   await waitFor(async () => {
-    const stored = await evaluate(client, workerSession, 'chrome.storage.local.get("look-at-me.session")');
+    const stored = await evaluateWorker('chrome.storage.local.get("look-at-me.session")');
     return stored?.['look-at-me.session']?.eventCount > activeState.eventCount ? stored['look-at-me.session'] : null;
   }, 'browser event persistence');
   await client.send('Target.activateTarget', { targetId: pageTargetId });
   await delay(2_200);
 
-  popup = await openPopup();
-  await clickPrimary(client, popup.sessionId);
+  await client.send('Target.activateTarget', { targetId: pageTargetId });
+  const fullscreenEventsBeforeFinish = await evaluateWorker(
+    `chrome.storage.local.get("look-at-me.events").then((value) => (value["look-at-me.events"] || []).filter((event) => event.type === "FULLSCREEN_EXIT").length)`);
+  const overlayFinishVisible = await evaluate(client, pageSession, `(() => {
+    const button = document.getElementById('look-at-me-proctoring-overlay')?.shadowRoot?.querySelector('button.finish');
+    return Boolean(button && /Завершить тест/i.test(button.textContent || ''));
+  })()`);
+  if (!overlayFinishVisible) throw new Error('The existing in-page overlay has no Finish Test action.');
+  console.error('[runtime-smoke] overlay finish action ready');
+  await client.send('Page.enable', {}, pageSession);
+  const clickFinish = client.send('Runtime.evaluate', {
+    expression: `document.getElementById('look-at-me-proctoring-overlay').shadowRoot.querySelector('button.finish').click()`,
+    returnByValue: true,
+  }, pageSession);
   await delay(150);
-  await clickPrimary(client, popup.sessionId);
+  await client.send('Page.handleJavaScriptDialog', { accept: true }, pageSession);
+  await clickFinish;
+  console.error('[runtime-smoke] overlay finish clicked');
   const stopped = await waitFor(async () => {
-    const stored = await evaluate(client, workerSession, 'chrome.storage.local.get("look-at-me.session")');
+    const stored = await evaluateWorker('chrome.storage.local.get("look-at-me.session")');
     const current = stored?.['look-at-me.session'];
     if (current?.status === 'PROCTORING_ERROR') throw new Error(current.error || current.proctoringStatus);
     return current?.status === 'PROCTORING_COMPLETED' ? current : null;
   }, 'completed proctoring session', 30_000);
+  console.error('[runtime-smoke] session completed from overlay');
   if (stopped?.status !== 'PROCTORING_COMPLETED') {
     throw new Error(`Stop did not complete the session: ${JSON.stringify(stopped)}`);
   }
+  const fullscreenEventsAfterFinish = await evaluateWorker(
+    `chrome.storage.local.get("look-at-me.events").then((value) => (value["look-at-me.events"] || []).filter((event) => event.type === "FULLSCREEN_EXIT").length)`);
+  if (fullscreenEventsAfterFinish !== fullscreenEventsBeforeFinish) {
+    throw new Error('Normal Finish Test flow created a false FULLSCREEN_EXIT event.');
+  }
 
   const screenshotsDirectory = join(evidenceRoot, 'screenshots');
+  console.error('[runtime-smoke] verifying local database and PNG files');
   const screenshots = (await readdir(screenshotsDirectory)).filter((name) => /^image\d+\.png$/.test(name));
-  const databasePath = join(evidenceRoot, 'violations.db');
+  const finalScreenshots = (await readdir(screenshotsDirectory)).filter((name) => /^final\d+\.png$/.test(name));
+  const databasePath = join(evidenceRoot, 'database.db');
   const database = await stat(databasePath);
   if (!screenshots.length) throw new Error('No PNG violation screenshot was written to disk.');
+  if (finalScreenshots.length !== 1 || stopped.finalScreenshotName !== finalScreenshots[0]) {
+    throw new Error(`Final screenshot was not saved or indexed: ${JSON.stringify({ finalScreenshots, stopped })}`);
+  }
+  const finalScreenshot = await readFile(join(screenshotsDirectory, finalScreenshots[0]));
+  if (!finalScreenshot.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+    throw new Error('The final screenshot is not a PNG file.');
+  }
   const firstScreenshot = await readFile(join(screenshotsDirectory, screenshots[0]));
   if (!firstScreenshot.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
     throw new Error('The saved violation screenshot is not a PNG file.');
@@ -338,6 +425,7 @@ try {
     url: `chrome-extension://${extensionId}/evidence.html`,
   });
   const evidenceSession = await attach(client, evidenceTargetId);
+  console.error('[runtime-smoke] evidence viewer opened');
   await waitFor(
     () => evaluate(client, evidenceSession, 'document.readyState === "complete"'),
     'evidence viewer load',
@@ -347,7 +435,7 @@ try {
       const rows = [...document.querySelectorAll('tbody tr')];
       return rows.length ? rows.map((row) => ({
         eventId: row.querySelector('button.delete')?.closest('tr')?.key,
-        screenshotName: row.querySelectorAll('code')[1]?.textContent,
+        screenshotName: row.querySelector('td:nth-child(4) small')?.textContent,
       })) : null;
     })()`),
     'evidence viewer SQLite rows',
@@ -368,7 +456,7 @@ try {
     document.querySelector('button.delete')?.click();
   })()`);
   await waitFor(async () => {
-    const names = await evaluate(client, evidenceSession, `[...document.querySelectorAll('tbody code')].map((node) => node.textContent)`);
+    const names = await evaluate(client, evidenceSession, `[...document.querySelectorAll('tbody tr td:nth-child(4) small')].map((node) => node.textContent)`);
     return !names.includes(firstViewerScreenshot) ? true : null;
   }, 'evidence viewer deletion');
   const screenshotsAfterDelete = (await readdir(screenshotsDirectory)).filter((name) => /^image\d+\.png$/.test(name));
@@ -383,25 +471,36 @@ try {
     cameraStatus: activeState.cameraStatus,
     aiStatus: activeState.aiStatus,
     faceStatus: activeState.faceStatus,
-    localAgentState: activeState.localAgentState,
+    localAgentStateObserved: activeState.localAgentState,
     overlayVisible: /look at me/i.test(overlayText),
     popupCameraVisible,
+    overlayFinishVerified: overlayFinishVisible,
     fullscreenStatus: activeState.fullscreenStatus,
     popupReopenPreservedSession: true,
-    nativeConnected: activeState.localAgentState === 'active',
+    nativeStorageVerified: true,
     stoppedStatus: stopped.status,
     storageStatus: stopped.storageStatus,
     screenshotsOnDisk: screenshots.length,
     evidenceViewerRows: viewerRows.length,
     evidenceDeleteVerified: true,
+    finalScreenshot: finalScreenshots[0],
+    gracefulFullscreenExitVerified: fullscreenEventsAfterFinish === fullscreenEventsBeforeFinish,
+    helperRecoveryVerified,
     screenshotsAfterDelete: screenshotsAfterDelete.length,
     screenshotsDirectory,
     sqlitePath: databasePath,
   }, null, 2));
 } catch (error) {
+  if (error.message === '__LOOK_AT_ME_HELPER_RECOVERY_ONLY_PASSED__') {
+    // The shared finally block still closes Chrome, the server, and temporary directories.
+  } else {
   if (chromeDiagnostics.trim()) console.error(chromeDiagnostics.trim());
   throw error;
+  }
 } finally {
+  if (exerciseHelperRecovery && originalNativeManifest) {
+    try { setNativeManifest(originalNativeManifest); } catch (error) { console.error(error.message); }
+  }
   try {
     if (client) await client.send('Browser.close');
   } catch {

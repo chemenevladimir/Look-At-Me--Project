@@ -41,6 +41,7 @@ export interface ExtensionSessionState {
   storageStatus: LocalStorageRuntimeStatus;
   dataRoot: string | null;
   evidenceCount: number;
+  finalScreenshotName: string | null;
   fullscreenStatus: FullscreenRuntimeStatus;
   previousWindowState: BrowserWindowState | null;
   cloudSyncStatus: CloudSyncStatus;
@@ -74,6 +75,7 @@ export const createIdleSessionState = (): ExtensionSessionState => ({
   storageStatus: 'IDLE',
   dataRoot: null,
   evidenceCount: 0,
+  finalScreenshotName: null,
   fullscreenStatus: 'IDLE',
   previousWindowState: null,
   cloudSyncStatus: 'NOT_CONFIGURED',
@@ -140,6 +142,9 @@ export const sanitizeStoredState = (value: unknown): ExtensionSessionState => {
     testName: typeof candidate.testName === 'string' ? candidate.testName.slice(0, 240) : '',
     currentTabUrl: typeof candidate.currentTabUrl === 'string' ? candidate.currentTabUrl.slice(0, 2_000) : null,
     evidenceCount: Math.max(0, Number(candidate.evidenceCount) || 0),
+    finalScreenshotName: typeof candidate.finalScreenshotName === 'string'
+      ? candidate.finalScreenshotName.slice(0, 160)
+      : null,
     dataRoot: typeof candidate.dataRoot === 'string' ? candidate.dataRoot.slice(0, 2_000) : null,
     error: typeof candidate.error === 'string' ? candidate.error.slice(0, 500) : null,
   };

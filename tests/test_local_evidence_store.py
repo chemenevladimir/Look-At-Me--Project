@@ -1,8 +1,10 @@
 import base64
+import os
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from local_evidence_store import LocalEvidenceStore, utc_iso_from_ms
 
@@ -15,7 +17,7 @@ PNG_1X1 = base64.b64decode(
 class LocalEvidenceStoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name) / "LookAtMeViolations"
+        self.root = Path(self.temp.name) / "LookAtMe"
         self.store = LocalEvidenceStore(self.root)
 
     def tearDown(self) -> None:
@@ -34,9 +36,10 @@ class LocalEvidenceStoreTests(unittest.TestCase):
         initialized = self.store.initialize()
         self.assertEqual(Path(initialized["dataRoot"]), self.root)
         self.assertTrue((self.root / "screenshots").is_dir())
-        self.assertTrue((self.root / "violations.db").is_file())
+        self.assertTrue((self.root / "recordings").is_dir())
+        self.assertTrue((self.root / "database.db").is_file())
 
-        connection = sqlite3.connect(self.root / "violations.db")
+        connection = sqlite3.connect(self.root / "database.db")
         try:
             columns = [row[1] for row in connection.execute("PRAGMA table_info(violations)")]
         finally:
@@ -51,7 +54,7 @@ class LocalEvidenceStoreTests(unittest.TestCase):
         screenshot = self.root / "screenshots" / "image001.png"
         self.assertEqual(screenshot.read_bytes(), PNG_1X1)
 
-        connection = sqlite3.connect(self.root / "violations.db")
+        connection = sqlite3.connect(self.root / "database.db")
         try:
             row = connection.execute(
                 "SELECT violation_time, violation_type, screenshot_name FROM violations"
@@ -59,6 +62,13 @@ class LocalEvidenceStoreTests(unittest.TestCase):
         finally:
             connection.close()
         self.assertEqual(row, (utc_iso_from_ms(1_791_278_400_123), "PHONE_DETECTED", "image001.png"))
+
+        connection = sqlite3.connect(self.root / "database.db")
+        try:
+            stored_path = connection.execute("SELECT screenshot_path FROM events").fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(Path(stored_path), screenshot)
 
     def test_uses_next_image_number_and_does_not_duplicate_event(self) -> None:
         first = self.save("PHONE_DETECTED-one", "PHONE_DETECTED", 1_791_278_400_000)
@@ -93,6 +103,63 @@ class LocalEvidenceStoreTests(unittest.TestCase):
     def test_delete_missing_violation_is_idempotent(self) -> None:
         result = self.store.delete_violation("PHONE_DETECTED-missing")
         self.assertFalse(result["deleted"])
+
+    def test_persists_session_long_event_and_final_screenshot(self) -> None:
+        session_id = "session_20261007_130000_final01"
+        started_at = 1_791_278_400_000
+        self.store.start_session({
+            "id": session_id,
+            "studentName": "Student",
+            "testName": "Demo test",
+            "startedAt": started_at,
+        })
+        event = {
+            "id": "HEAD_TURN-long",
+            "type": "HEAD_TURN",
+            "timestamp": started_at + 2_000,
+            "duration": 12_400,
+            "confidence": 0.88,
+            "severity": 4,
+            "scoreImpact": 15,
+            "source": "cv",
+            "explanation": "Approximate head pose stayed left for 12.4 s.",
+        }
+        self.store.save_event(session_id, event)
+        final = self.store.save_final_screenshot(
+            session_id, base64.b64encode(PNG_1X1).decode(), "image/png"
+        )
+        self.assertEqual(final["screenshotName"], "final001.png")
+        self.assertTrue(Path(str(final["screenshotPath"])).is_file())
+        self.store.finish_session(session_id, {
+            "endedAt": started_at + 20_000,
+            "durationSeconds": 20,
+            "activityScore": 15,
+            "violationsCount": 1,
+            "status": "COMPLETED",
+        })
+
+        connection = sqlite3.connect(self.root / "database.db")
+        try:
+            stored_event = connection.execute(
+                "SELECT duration_ms, severity, score_impact, ended_at FROM events WHERE event_id=?",
+                (event["id"],),
+            ).fetchone()
+            stored_session = connection.execute(
+                "SELECT status, activity_score, final_screenshot_name FROM sessions WHERE id=?",
+                (session_id,),
+            ).fetchone()
+        finally:
+            connection.close()
+        self.assertEqual(stored_event[:3], (12_400, 4, 15))
+        self.assertEqual(stored_event[3], utc_iso_from_ms(started_at + 14_400))
+        self.assertEqual(stored_session, ("COMPLETED", 15, "final001.png"))
+
+    @unittest.skipUnless(os.name == "nt", "Explorer integration is Windows-only")
+    def test_opens_dynamic_screenshots_folder(self) -> None:
+        with mock.patch.object(os, "startfile") as startfile:
+            result = self.store.open_screenshots_folder()
+        startfile.assert_called_once_with(str(self.root / "screenshots"))
+        self.assertTrue(result["opened"])
 
 
 if __name__ == "__main__":

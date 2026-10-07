@@ -264,6 +264,35 @@ export class ProctoringEngine {
     });
   }
 
+  public getActiveDirectionProgress(): Array<{ id: string; update: EventProgressUpdate }> {
+    const updates: Array<{ id: string; update: EventProgressUpdate }> = [];
+    for (const type of ['HEAD_TURN', 'LOOKING_AWAY'] as const) {
+      const active = this.activeDirectionEvents[type];
+      const episode = type === 'HEAD_TURN'
+        ? this.trackers.head.getActiveEpisode()
+        : this.trackers.gaze.getActiveEpisode();
+      if (active && episode?.emitted) {
+        updates.push({
+          id: active.id,
+          update: {
+            duration: episode.duration,
+            confidence: episode.confidence,
+            explanation: type === 'HEAD_TURN'
+              ? `Approximate head pose stayed ${episode.label} for ${formatDuration(episode.duration)}.`
+              : `Possible gaze deviation stayed ${episode.label} for ${formatDuration(episode.duration)}.`,
+            metadata: {
+              direction: episode.label,
+              samples: episode.samples,
+              endedAt: episode.lastObservedAt,
+              confidenceKind: 'geometry-and-temporal',
+            },
+          },
+        });
+      }
+    }
+    return updates;
+  }
+
   private resetRuntime(): void {
     this.trackers = createTrackers();
     this.calibrator.reset();
@@ -282,7 +311,7 @@ export class ProctoringEngine {
       if (!this.active || !this.faceModel || this.faceInferenceBusy) return;
       this.faceInferenceBusy = true;
       void this.analyzeFaceFrame().finally(() => { this.faceInferenceBusy = false; });
-    }, 180);
+    }, 120);
     this.phoneTimer = window.setInterval(() => {
       if (!this.active || !this.phoneModel || this.phoneInferenceBusy) return;
       this.phoneInferenceBusy = true;
@@ -411,6 +440,7 @@ export class ProctoringEngine {
     if (trigger) {
       const event = await this.callbacks.recordEvent({
         type,
+        timestamp: trigger.startedAt,
         duration: trigger.duration,
         confidence: trigger.confidence,
         severity: 4,
@@ -418,7 +448,12 @@ export class ProctoringEngine {
           ? `Approximate head pose stayed ${trigger.label} for ${formatDuration(trigger.duration)}.`
           : `Possible gaze deviation stayed ${trigger.label} for ${formatDuration(trigger.duration)}.`,
         source: 'cv',
-        metadata: { direction: trigger.label, samples: trigger.samples, confidenceKind: 'geometry-and-temporal' },
+        metadata: {
+          direction: trigger.label,
+          samples: trigger.samples,
+          endedAt: trigger.lastObservedAt,
+          confidenceKind: 'geometry-and-temporal',
+        },
       });
       if (event) {
         active = { id: event.id, label: trigger.label, scoreImpact: event.scoreImpact };
@@ -447,7 +482,12 @@ export class ProctoringEngine {
       explanation: type === 'HEAD_TURN'
         ? `Approximate head pose stayed ${episode.label} for ${formatDuration(episode.duration)}.`
         : `Possible gaze deviation stayed ${episode.label} for ${formatDuration(episode.duration)}.`,
-      metadata: { direction: episode.label, samples: episode.samples, confidenceKind: 'geometry-and-temporal' },
+      metadata: {
+        direction: episode.label,
+        samples: episode.samples,
+        endedAt: episode.lastObservedAt,
+        confidenceKind: 'geometry-and-temporal',
+      },
     });
     if (updated) active.scoreImpact = updated.scoreImpact;
   }

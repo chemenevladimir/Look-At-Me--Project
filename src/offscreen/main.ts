@@ -23,6 +23,15 @@ const engine = new ProctoringEngine({
   },
 });
 
+const captureCameraFrame = async (): Promise<CameraEvidenceFrame | null> => {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const frame = engine.captureFrame(640);
+    if (frame) return frame;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  return null;
+};
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || message.target !== 'offscreen') return false;
   if (message.type === 'engine-start' && typeof message.sessionId === 'string') {
@@ -42,23 +51,31 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     });
     return true;
   }
+  if (message.type === 'engine-flush-events') {
+    sendResponse({ flushed: true, updates: engine.getActiveDirectionProgress() });
+    return false;
+  }
   if (message.type === 'compose-evidence') {
     const pageFrame = message.pageFrame as CameraEvidenceFrame | undefined;
-    const cameraFrame = engine.captureFrame(640);
     if (!pageFrame?.data || pageFrame.mimeType !== 'image/png') {
       sendResponse({ captured: false, error: 'The visible test-page PNG is unavailable.' });
       return false;
     }
-    if (!cameraFrame) {
-      sendResponse({ captured: false, error: 'The live camera frame is unavailable.' });
-      return false;
-    }
-    void composeEvidencePng(
-      pageFrame,
-      cameraFrame,
-      typeof message.eventType === 'string' ? message.eventType : 'VIOLATION',
-      Number(message.timestamp) || Date.now(),
-    ).then((frame) => sendResponse({ captured: true, frame })).catch((error) => {
+    void (async () => {
+      const cameraFrame = await captureCameraFrame();
+      if (!cameraFrame) throw new Error('The live camera frame is unavailable after retry.');
+      return composeEvidencePng(
+        pageFrame,
+        cameraFrame,
+        typeof message.eventType === 'string' ? message.eventType : 'VIOLATION',
+        Number(message.timestamp) || Date.now(),
+        message.final === true ? {
+          final: true,
+          score: Number(message.score) || 0,
+          status: typeof message.status === 'string' ? message.status : 'COMPLETED',
+        } : {},
+      );
+    })().then((frame) => sendResponse({ captured: true, frame })).catch((error) => {
       sendResponse({ captured: false, error: error instanceof Error ? error.message : String(error) });
     });
     return true;

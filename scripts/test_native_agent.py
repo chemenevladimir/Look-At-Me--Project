@@ -59,7 +59,7 @@ def main() -> int:
     temporary_data = tempfile.TemporaryDirectory() if args.exercise_storage else None
     child_environment = os.environ.copy()
     if temporary_data:
-        child_environment["LOOK_AT_ME_DATA_DIR"] = str(Path(temporary_data.name) / "LookAtMeViolations")
+        child_environment["LOOK_AT_ME_DATA_DIR"] = str(Path(temporary_data.name) / "LookAtMe")
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -100,6 +100,15 @@ def main() -> int:
 
             initialized = request({"type": "storage-initialize"})
             event_id = "PHONE_DETECTED-protocol-smoke"
+            request({
+                "type": "storage-session-start",
+                "session": {
+                    "id": session_id,
+                    "studentName": "Protocol Student",
+                    "testName": "Native host smoke",
+                    "startedAt": started_at,
+                },
+            })
             saved = request({
                 "type": "storage-violation-save",
                 "sessionId": session_id,
@@ -107,6 +116,12 @@ def main() -> int:
                     "id": event_id,
                     "type": "PHONE_DETECTED",
                     "timestamp": started_at + 1000,
+                    "duration": 3200,
+                    "confidence": 0.94,
+                    "severity": 8,
+                    "scoreImpact": 18,
+                    "source": "cv",
+                    "explanation": "Possible smartphone detected.",
                 },
                 "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z9WQAAAAASUVORK5CYII=",
                 "mimeType": "image/png",
@@ -125,6 +140,26 @@ def main() -> int:
                 connection.close()
             if not row or row[1:] != ("PHONE_DETECTED", "image001.png"):
                 raise RuntimeError(f"SQLite violation row is invalid: {row}")
+            final = request({
+                "type": "storage-final-screenshot-save",
+                "sessionId": session_id,
+                "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z9WQAAAAASUVORK5CYII=",
+                "mimeType": "image/png",
+            })
+            final_screenshot = Path(str(final["screenshotPath"]))
+            if final_screenshot.name != "final001.png" or not final_screenshot.is_file():
+                raise RuntimeError(f"Final screenshot was not created: {final}")
+            request({
+                "type": "storage-session-finish",
+                "sessionId": session_id,
+                "session": {
+                    "endedAt": started_at + 10_000,
+                    "durationSeconds": 10,
+                    "activityScore": 18,
+                    "violationsCount": 1,
+                    "status": "COMPLETED",
+                },
+            })
             listed = request({"type": "storage-list-violations", "limit": 100})
             violations = listed.get("violations") or []
             if len(violations) != 1 or violations[0].get("event_id") != event_id:

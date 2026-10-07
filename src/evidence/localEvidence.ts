@@ -14,4 +14,10 @@ export const serializeViolation = (event: ProctorEvent) => ({
   id: event.id,
   type: event.type,
   timestamp: event.timestamp,
+  duration: event.duration,
+  confidence: event.confidence,
+  severity: event.severity,
+  scoreImpact: event.scoreImpact,
+  explanation: event.explanation,
+  source: event.source,
 });

@@ -23,10 +23,10 @@ describe('TemporalSignalTracker', () => {
     tracker.update('left', 0.9, 500);
     const trigger = tracker.update('left', 1, 1_100);
 
-    expect(trigger).toMatchObject({ label: 'left', duration: 1_100, samples: 3 });
+    expect(trigger).toMatchObject({ label: 'left', startedAt: 0, lastObservedAt: 1_100, duration: 1_100, samples: 3 });
     expect(trigger?.confidence).toBeCloseTo(0.9);
     expect(tracker.update('left', 1, 2_200)).toBeNull();
-    expect(tracker.getActiveEpisode()).toMatchObject({ duration: 2_200, samples: 4, emitted: true });
+    expect(tracker.getActiveEpisode()).toMatchObject({ startedAt: 0, lastObservedAt: 2_200, duration: 2_200, samples: 4, emitted: true });
   });
 
   it('tolerates a brief normal sample but resets after recovery grace', () => {

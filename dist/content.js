@@ -94,6 +94,9 @@
       .metric b { font-size:11px; color:#f8fafc; }
       .alert { margin-top:10px; border-radius:10px; padding:8px 9px; color:#fecdd3; background:rgba(190,24,93,.18); border:1px solid rgba(251,113,133,.24); }
       .note { margin-top:9px; color:#94a3b8; font-weight:500; font-size:10px; }
+      .finish { width:100%; height:34px; margin-top:10px; border:1px solid rgba(251,113,133,.4); border-radius:10px;
+        color:#fff1f2; background:rgba(190,24,93,.28); font:800 11px/1 system-ui,sans-serif; cursor:pointer; pointer-events:auto; }
+      .finish:hover { background:rgba(225,29,72,.42); }.finish:disabled { opacity:.6; cursor:wait; }
     </style>
     <section class="card" aria-label="Look At Me proctoring status">
       <div class="top"><div class="status"><i class="dot"></i>${active ? "PROCTORING ACTIVE" : state.status.replace("PROCTORING_", "")}</div><div class="brand">LOOK AT ME!</div></div>
@@ -106,8 +109,28 @@
         <div class="metric"><label>SCREENSHOTS</label><b>${state.evidenceCount}</b></div>
       </div>
       ${state.lastAlert ? `<div class="alert">\u26A0 ${state.lastAlert}</div>` : ""}
+      <button class="finish" type="button">\u0417\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u044C \u0442\u0435\u0441\u0442</button>
       <div class="note">Local analysis \xB7 human review required</div>
     </section>`;
+    const finishButton = root.querySelector("button.finish");
+    finishButton?.addEventListener("click", () => {
+      if (!state || !isSessionRunning(state.status)) return;
+      if (!window.confirm("\u0412\u044B \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0442\u0435\u043B\u044C\u043D\u043E \u0445\u043E\u0442\u0438\u0442\u0435 \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u044C \u0442\u0435\u0441\u0442?")) return;
+      finishButton.disabled = true;
+      finishButton.textContent = "\u0417\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0438\u0435\u2026";
+      void chrome.runtime.sendMessage({ type: "content-finish-session", confirmed: true }).then((response) => {
+        if (response?.state) {
+          state = response.state;
+          renderOverlay();
+        } else if (!response?.accepted) {
+          finishButton.disabled = false;
+          finishButton.textContent = "\u0417\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u044C \u0442\u0435\u0441\u0442";
+        }
+      }).catch(() => {
+        finishButton.disabled = false;
+        finishButton.textContent = "\u0417\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u044C \u0442\u0435\u0441\u0442";
+      });
+    });
   };
   var readIntent = () => {
     try {

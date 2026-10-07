@@ -72,9 +72,21 @@
 
 **Reason:** Vite intentionally replaces `dist` on every production build. Registering a manifest under `dist/native-host/generated` made a successful rebuild silently invalidate Chrome's Native Messaging registration. A stable per-user installation keeps build output disposable while preserving the registered runtime.
 
+## ADR-013: Persist every event and create a final screenshot before shutdown
+
+**Decision:** Use SQLite `sessions` and `events` as the durable local record, while retaining the earlier `violations` table for migration compatibility. Upsert every Event Engine event and continuous-duration update. On normal finish, flush the active direction episode, capture `finalNNN.png` while the camera is still live, finalize the session row, then stop CV/helper and leave fullscreen under an explicit expected-exit guard.
+
+**Reason:** A screenshot-only violation index could not represent no-violation sessions, final score, end status, or long-event end times. Capturing before shutdown produces reviewable final evidence and keeps normal fullscreen exit distinct from an observed escape attempt.
+
+## ADR-014: Discover dynamic unpacked-extension IDs during setup
+
+**Decision:** Keep the extension manifest free of a fixed signing key. The Windows wrapper matches Chrome profile entries against the actual `dist` path, then generates the Native Messaging `allowed_origins` entry for that ID. A manual ID remains a fallback. Bundle the pinned `keyboard` wheel and install the host under `%LOCALAPPDATA%`.
+
+**Reason:** Unpacked IDs can change with checkout path and computer. Path-based discovery preserves Chrome's exact-origin security requirement without binding the repository to the owner's ID, while the bundled wheel removes setup's network dependency.
+
 ## ADR-013: Store screenshot-only evidence in Documents
 
-**Decision:** Do not record full-session or short-event video. For every confirmed scored violation, compose one real PNG containing the visible test page and a labeled current-camera inset, save it to `Documents\LookAtMeViolations\screenshots\imageNNN.png`, and insert the violation time, type, and image filename into `Documents\LookAtMeViolations\violations.db`. Keep the Event Engine as the only event source and use the Native Messaging host for file/SQLite access.
+**Decision:** Do not record full-session or short-event video. For every confirmed scored violation, compose one real PNG containing the visible test page and a labeled current-camera inset, save it to `Documents\LookAtMe\screenshots\imageNNN.png`, and insert the violation time, type, filename and full local path into `Documents\LookAtMe\database.db`. Keep the Event Engine as the only event source and use the Native Messaging host for file/SQLite access. Move the former default `LookAtMeViolations` store into this final location once, preserving existing data.
 
 **Reason:** The owner explicitly removed video recording and the earlier per-session JSON/WebM layout. Chrome extensions cannot write arbitrary local files or SQLite directly. A small native helper provides durable local evidence without cloud services, while one screenshot per confirmed event limits storage and preserves an explainable event-to-image relation.
 

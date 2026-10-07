@@ -5,7 +5,7 @@
 - **Model:** MediaPipe Face Landmarker, float16 task bundle.
 - **Runtime:** `@mediapipe/tasks-vision` WebAssembly with GPU delegate and CPU fallback.
 - **Location:** `public/models/face_landmarker.task`; WASM assets are under `public/mediapipe/wasm`.
-- **Input:** Local webcam video frame supplied to `detectForVideo` at a throttled interval of about 180 ms. Duplicate video frames and overlapping inference calls are skipped.
+- **Input:** Local webcam video frame supplied to `detectForVideo` at a target interval of about 120 ms. Duplicate video frames and overlapping inference calls are skipped, so actual FPS follows device/runtime performance.
 - **Output:** Up to three faces, each with 478 normalized 3D landmarks; an optional facial transformation matrix is enabled for future diagnostics.
 - **Inference method:** On-device browser inference. Frames are neither uploaded nor saved by the current pipeline.
 - **Confidence:** The Web result does not expose a raw face-detection confidence. Look At Me! reports a derived measurement-quality value from face scale, facial geometry, two-eye iris agreement, and temporal sample support. Event metadata identifies this as `geometry-and-temporal` or `temporal-support`.

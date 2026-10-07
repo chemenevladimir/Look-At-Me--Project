@@ -8,6 +8,8 @@ export interface TemporalSignalOptions<T extends string> {
 
 export interface TemporalTrigger<T extends string> {
   label: T;
+  startedAt: number;
+  lastObservedAt: number;
   duration: number;
   confidence: number;
   samples: number;
@@ -61,6 +63,8 @@ export class TemporalSignalTracker<T extends string> {
     if (!this.candidate || this.sampleCount === 0) return null;
     return {
       label: this.candidate,
+      startedAt: this.startedAt,
+      lastObservedAt: this.lastObservedAt,
       duration: Math.max(0, this.lastObservedAt - this.startedAt),
       confidence: this.confidenceTotal / this.sampleCount,
       samples: this.sampleCount,
@@ -88,6 +92,8 @@ export class TemporalSignalTracker<T extends string> {
     this.lastEventAt = now;
     return {
       label: episode.label,
+      startedAt: episode.startedAt,
+      lastObservedAt: episode.lastObservedAt,
       duration: episode.duration,
       confidence: episode.confidence,
       samples: episode.samples,

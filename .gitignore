@@ -1,3 +1,25 @@
-# Intentionally empty: this hackathon repository mirrors the complete
-# project workspace, including dependencies, build outputs, caches, and
-# generated local-agent artifacts. Git's own .git directory is never tracked.
+# Dependencies are restored from the lockfile.
+node_modules/
+.agent-deps/
+
+# Language and tool caches.
+__pycache__/
+*.py[cod]
+*.tsbuildinfo
+.vite/
+coverage/
+test-results/
+*.log
+
+# Local secrets and machine state.
+.env
+.env.*
+!.env.example
+native_host/generated/
+
+# Runtime evidence belongs in the current user's Documents folder.
+LookAtMeViolations/
+violations.db
+violations.db-*
+screenshots/
+/docs/evidence-viewer.png

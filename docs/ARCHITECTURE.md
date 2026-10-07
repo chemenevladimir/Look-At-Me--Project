@@ -8,7 +8,7 @@ Look At Me! collects explainable observations for human review. The Activity Sco
 
 ```text
 Temporary toolbar popup
-  ├─ Start / confirmed Stop
+  ├─ Start / confirmed Finish Test
   ├─ read-only session status
   └─ Open local evidence page
                 │ chrome.runtime messages
@@ -59,8 +59,8 @@ The engine owns per-type cooldown policy and score calculation. Activity Score s
 3. The first stable single-face samples calibrate a neutral nose, head roll, and iris position.
 4. Exponential smoothing reduces frame-to-frame jitter.
 5. Direction thresholds classify only approximate `left`, `right`, `up`, `down`, or `normal` states, reported from the student's perspective in the mirrored selfie preview.
-6. A temporal tracker requires one second of sustained observation and emits one event per episode. The first analyzed `normal` state ends the episode; any later deviation must pass the one-second threshold again and receives a recurrence increment.
-7. While the deviation continues, the Event Engine updates that event's duration and adds one point for each full second after the first.
+6. A temporal tracker requires one second of sustained observation and emits one event per episode. Its timestamp is the measured episode start, not the later threshold-crossing frame. The first analyzed `normal` state ends the episode; any later deviation must pass the one-second threshold again and receives a recurrence increment.
+7. While the deviation continues, the Event Engine updates that event's duration, end time and score. Finalization flushes the active episode once more before camera shutdown.
 
 Gaze deviation is suppressed while a head turn is active so the same movement is not double-counted as both HEAD_TURN and LOOKING_AWAY.
 
@@ -94,9 +94,9 @@ The popup opens a runtime port only while it is visible so status changes can be
 
 Native Messaging is preferred over an unauthenticated localhost port. Messages are UTF-8 JSON preceded by a native-endian 32-bit byte length. On Windows, stdin and stdout are switched to binary mode so newline conversion cannot corrupt the protocol. Heartbeats expose disconnects without inventing events.
 
-Confirmed violations use the same Event Engine objects; there is no second event pipeline. The service worker calls `chrome.tabs.captureVisibleTab()` for the visible test page and sends that PNG to the offscreen document. The offscreen document takes a current webcam frame and composes it as a labeled camera inset over the page screenshot. The Native Messaging host validates the final PNG signature and writes it atomically to `Documents\LookAtMeViolations\screenshots\imageNNN.png`, then commits the matching UTC time, type, and filename to `Documents\LookAtMeViolations\violations.db`. If either source frame, image composition, or database writing fails, the UI reports a storage error instead of claiming evidence was saved.
+Every unified Event Engine event is upserted into local SQLite with session ID, UTC start/end, duration, confidence, severity, score impact, source and explanation. Confirmed violations additionally use `chrome.tabs.captureVisibleTab()` and the current offscreen webcam frame to compose `imageNNN.png`. Normal finalization creates a separate `finalNNN.png` with page, camera, score, time and a FINAL SCREENSHOT banner before camera shutdown. Session summary and screenshot names are committed before the helper stops. If capture or storage fails, the session enters ERROR instead of claiming success.
 
-The Native Messaging installer copies the host, dependency directory, launcher and manifest to `%LOCALAPPDATA%\LookAtMe\native-host` before registering it under HKCU. The registry never points into `dist`, because the Vite production build replaces that directory and would otherwise break an already registered host.
+The Native Messaging installer discovers the extension ID associated with the selected `dist` path (or accepts any valid ID), installs the bundled Python wheel without network access, and copies the host, dependency directory, launcher and generated manifest to `%LOCALAPPDATA%\LookAtMe\native-host` before registering it under HKCU. The registry never points into `dist`, because Vite replaces that directory. Evidence uses the Windows Documents Known Folder and is independent of a particular username or checkout path.
 
 The Chrome toolbar action uses the normal `action.default_popup` entry point. Starting a session binds it to the current ordinary HTTP(S) tab and injects no new site, tab, or application window. The content script renders a pointer-transparent Shadow DOM overlay on that page. The offscreen document, service worker, and local agent continue after the toolbar popup loses focus.
 

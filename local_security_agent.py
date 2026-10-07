@@ -401,6 +401,16 @@ def run_host(reader: BinaryIO | None = None, writer: BinaryIO | None = None) -> 
         try:
             if message_type == "storage-initialize":
                 result = store().initialize()
+            elif message_type == "storage-session-start":
+                session_data = message.get("session")
+                if not isinstance(session_data, dict):
+                    raise ValueError("Session metadata is required.")
+                result = store().start_session(session_data)
+            elif message_type == "storage-event-upsert":
+                event_data = message.get("event")
+                if not isinstance(event_data, dict):
+                    raise ValueError("Event metadata is required.")
+                result = store().save_event(str(message.get("sessionId") or ""), event_data)
             elif message_type == "storage-violation-save":
                 result = store().save_violation(
                     str(message.get("sessionId") or ""),
@@ -408,6 +418,17 @@ def run_host(reader: BinaryIO | None = None, writer: BinaryIO | None = None) -> 
                     str(message.get("data") or ""),
                     str(message.get("mimeType") or ""),
                 )
+            elif message_type == "storage-final-screenshot-save":
+                result = store().save_final_screenshot(
+                    str(message.get("sessionId") or ""),
+                    str(message.get("data") or ""),
+                    str(message.get("mimeType") or ""),
+                )
+            elif message_type == "storage-session-finish":
+                session_data = message.get("session")
+                if not isinstance(session_data, dict):
+                    raise ValueError("Final session metadata is required.")
+                result = store().finish_session(str(message.get("sessionId") or ""), session_data)
             elif message_type == "storage-list-violations":
                 evidence_store_instance = store()
                 result = {
@@ -416,6 +437,8 @@ def run_host(reader: BinaryIO | None = None, writer: BinaryIO | None = None) -> 
                 }
             elif message_type == "storage-delete-violation":
                 result = store().delete_violation(str(message.get("eventId") or ""))
+            elif message_type == "storage-open-screenshots":
+                result = store().open_screenshots_folder()
             else:
                 raise ValueError(f"Unsupported storage command: {message_type!r}")
             storage_response(message, result)

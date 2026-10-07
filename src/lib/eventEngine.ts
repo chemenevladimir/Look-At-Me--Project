@@ -7,6 +7,7 @@ interface EventPolicy {
 }
 
 export type EventInput = Omit<ProctorEvent, 'id' | 'timestamp' | 'scoreImpact' | 'severity'> & {
+  timestamp?: number;
   severity?: number;
   scoreImpact?: number;
 };
@@ -110,6 +111,9 @@ export class EventEngine {
 
   public record(input: EventInput): ProctorEvent | null {
     const now = this.now();
+    const timestamp = Number.isFinite(input.timestamp) && Number(input.timestamp) > 0
+      ? Number(input.timestamp)
+      : now;
     const policy = policies[input.type];
     const lastSeen = this.cooldowns.get(input.type);
 
@@ -131,7 +135,7 @@ export class EventEngine {
     const normalizedEvent: ProctorEvent = {
       ...input,
       id: makeId(input.type, now),
-      timestamp: now,
+      timestamp,
       duration,
       severity: clamp(input.severity ?? policy.severity, 0, 10),
       confidence,

@@ -52,6 +52,7 @@ export const composeEvidencePng = async (
   cameraFrame: CameraEvidenceFrame,
   eventType: string,
   timestamp: number,
+  options: { final?: boolean; score?: number; status?: string } = {},
 ): Promise<CameraEvidenceFrame> => {
   const [page, camera] = await Promise.all([decodePng(pageFrame), decodePng(cameraFrame)]);
   try {
@@ -63,6 +64,24 @@ export const composeEvidencePng = async (
     if (!context) throw new Error('Canvas 2D is unavailable for evidence composition.');
 
     context.drawImage(page, 0, 0, layout.canvasWidth, layout.canvasHeight);
+
+    if (options.final) {
+      const bannerHeight = Math.max(48, Math.round(layout.canvasHeight * 0.085));
+      context.fillStyle = 'rgba(7,17,31,.94)';
+      context.fillRect(0, 0, layout.canvasWidth, bannerHeight);
+      context.fillStyle = '#6ee7b7';
+      context.textAlign = 'left';
+      context.textBaseline = 'middle';
+      context.font = `800 ${Math.max(18, Math.round(bannerHeight * 0.38))}px system-ui, sans-serif`;
+      context.fillText('LOOK AT ME! · FINAL SCREENSHOT', Math.round(bannerHeight * 0.35), bannerHeight / 2);
+      context.fillStyle = '#e2e8f0';
+      context.textAlign = 'right';
+      context.font = `600 ${Math.max(12, Math.round(bannerHeight * 0.25))}px system-ui, sans-serif`;
+      const status = (options.status || 'COMPLETED').replace(/[^A-Z0-9 _-]/gi, '').slice(0, 30);
+      const score = Math.min(200, Math.max(0, Math.round(options.score || 0)));
+      context.fillText(`${status} · SCORE ${score}/200 · ${new Date(timestamp).toLocaleString()}`,
+        layout.canvasWidth - Math.round(bannerHeight * 0.35), bannerHeight / 2);
+    }
 
     const border = Math.max(3, Math.round(layout.cameraWidth * 0.012));
     const labelY = layout.cameraY + layout.cameraHeight;

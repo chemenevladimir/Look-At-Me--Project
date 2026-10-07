@@ -1,65 +1,73 @@
-# Local violation evidence
+# Local session and screenshot evidence
 
-Look At Me! stores only screenshots of confirmed, scored violations. It does not record the full test or create WebM video files.
+Look At Me! does not record video. The registered Native Messaging helper stores structured session/event metadata and PNG screenshots on the local Windows computer.
 
 ## Physical location
 
-The default Windows location is:
+Production resolves the Windows Documents Known Folder, including OneDrive redirection, and creates:
 
 ```text
-%USERPROFILE%\Documents\LookAtMeViolations\
-├── violations.db
+Documents\LookAtMe\
+├── database.db
+├── recordings\
 └── screenshots\
     ├── image001.png
     ├── image002.png
+    ├── final001.png
     └── ...
 ```
 
-`LOOK_AT_ME_DATA_DIR` may override the root for isolated automated tests. Production startup does not set this variable, so the helper uses the Documents path above.
+`LOOK_AT_ME_DATA_DIR` overrides this root only for isolated automated tests.
 
 ## SQLite schema
 
-The helper creates one table:
+`sessions` is the durable session summary:
 
-```sql
-CREATE TABLE violations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id TEXT NOT NULL UNIQUE,
-    session_id TEXT NOT NULL,
-    violation_time TEXT NOT NULL,
-    violation_type TEXT NOT NULL,
-    screenshot_name TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL
-);
+```text
+id, student_name, test_name, started_at, ended_at, duration_seconds,
+activity_score, violations_count, status, final_screenshot_name,
+created_at, updated_at
 ```
 
-The user-facing relation is intentionally simple: `violation_time` + `violation_type` + `screenshot_name`. `event_id` prevents the same Event Engine event from creating duplicate files, and `session_id` keeps evidence attributable when several sessions share the same database.
+`events` is the canonical event log:
+
+```text
+event_id, session_id, event_time, ended_at, event_type, duration_ms,
+confidence, severity, score_impact, source, description,
+screenshot_name, screenshot_path, created_at, updated_at
+```
+
+`violations` remains as a compatibility index for screenshot evidence created by earlier releases. `final_screenshots` provides monotonic `finalNNN.png` allocation. Startup migrates earlier violation rows into `sessions` and `events` without changing or deleting their PNG files.
+
+`recordings` is created only to keep the local data layout stable. This release does not record video.
+
+Every Event Engine event is upserted near its occurrence. A continuing `HEAD_TURN` or `LOOKING_AWAY` updates the same `event_id`; the row's duration, end, confidence and score grow without duplicate rows. The finalization flow flushes the last active duration before stopping camera inference.
+
+## Screenshot capture
+
+```text
+confirmed scored event
+        ↓
+chrome.tabs.captureVisibleTab + current offscreen camera frame
+        ↓
+composite PNG (page + mirrored labeled camera inset)
+        ↓
+atomic screenshots/imageNNN.png + event screenshot_name
+
+normal session finish
+        ↓
+page + camera + FINAL SCREENSHOT banner + score + time
+        ↓
+atomic screenshots/finalNNN.png + session final_screenshot_name
+```
+
+The helper validates a bounded PNG signature, writes a temporary file, flushes it with `fsync`, atomically replaces the final path, and then commits SQLite. File numbers are calculated against physical files while holding the storage lock, so orphaned or older files are never overwritten.
 
 ## Readable evidence page
 
-The popup button **Открыть базу нарушений** opens the bundled `evidence.html` extension page. The page requests up to 1,000 current rows through the service worker and Native Messaging host, then displays local time, violation type, session ID, and screenshot filename in a normal table. It never parses the binary SQLite file in the browser and does not expose a localhost server.
+The popup opens `evidence.html`. The page reads up to 1,000 records through the service worker and Native Messaging, then shows type, start time, duration, confidence, severity, score impact, source, session ID, description and screenshot filename.
 
-**Удалить** asks for confirmation and sends the selected `event_id` to the helper. Under an immediate SQLite transaction, the helper moves the matching PNG to a temporary same-directory name, removes the row, commits, and then removes the temporary file. If the database operation fails, it rolls back and restores the PNG. A successful response removes the row from the page immediately. **Обновить** reads SQLite again.
-
-![Evidence viewer](evidence-viewer.png)
-
-## Capture path
-
-```text
-CV / browser / system observation
-        ↓
-single Event Engine
-        ↓ confirmed scored violation
-visible test page + current live-camera frame
-        ↓ offscreen canvas composition
-single PNG with student camera inset
-        ↓ PNG base64 over Native Messaging
-local_evidence_store.py
-        ├─ atomic screenshots/imageNNN.png write
-        └─ SQLite transaction linking time, type and filename
-```
-
-The composite keeps the test page as the background and places a mirrored, labeled live-camera inset in the lower-right area so the violation context and student are visible together. The filename number comes from SQLite's monotonic row ID, so a restart or new proctoring session does not overwrite older screenshots. The helper accepts only bounded payloads with the PNG signature. It writes a temporary file, calls `fsync`, and atomically replaces the final filename before committing the database row. A failed transaction removes the incomplete image.
+The page has explicit Connecting, Online and Offline states. Native reconnect uses one exponential-backoff timer capped at 30 seconds. A user can request an immediate retry. Deleting a row moves the PNG aside, deletes SQLite metadata in an immediate transaction, commits, and removes the temporary file; rollback restores the PNG.
 
 ## Verification
 
@@ -67,16 +75,16 @@ The composite keeps the test page as the background and places a mirrored, label
 pnpm typecheck
 pnpm test
 python -m unittest discover -s tests -v
-python scripts/test_native_agent.py --exercise-storage
+python scripts\test_native_agent.py --exercise-storage
 pnpm build
 pnpm test:extension-runtime
 ```
 
-The extension runtime smoke starts the actual unpacked MV3 build, closes and reopens the popup, produces real browser violations, verifies non-empty PNG and SQLite files, opens the evidence page, and deletes one record through its real button. The test then verifies that the row disappears from the page and its matching PNG disappears from disk. Use `LOOK_AT_ME_TEST_DATA_DIR` to direct that runtime test to an explicit evidence root. Chrome 137+ branded builds removed automated `--load-extension`; use Chrome for Testing through `LOOK_AT_ME_CHROME` for this automated test.
+The Chrome runtime test loads the real unpacked `dist`, starts offscreen camera/CV, closes and reopens popup, creates browser events, saves composite evidence and `final001.png`, proves normal finish adds no `FULLSCREEN_EXIT`, reads/deletes a row through the real viewer, and verifies physical SQLite/PNG state.
 
 ## Limits
 
-- Chrome cannot write SQLite or arbitrary Documents files itself, so the registered Native Messaging helper is required.
-- `captureVisibleTab()` requires the manifest's `<all_urls>` host permission. Content-script injection remains restricted to HTTP(S), and protected browser pages are still unavailable.
-- A browser/system screenshot captures Chrome's visible tab, not the Windows desktop or another application.
-- Screenshots are local files. Inline image preview, filtering, retention limits, and cloud synchronization are not implemented in this phase.
+- Native Messaging is required because an MV3 extension cannot write arbitrary Documents files or SQLite directly.
+- `<all_urls>` is required by `captureVisibleTab()` across ordinary sites; protected Chrome pages remain unavailable.
+- The screenshot covers the visible Chrome tab and webcam, not the Windows desktop or another application.
+- There is no cloud upload, video recording, screenshot retention policy, or automatic teacher verdict.

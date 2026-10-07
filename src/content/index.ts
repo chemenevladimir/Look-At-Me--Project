@@ -79,6 +79,9 @@ const renderOverlay = (): void => {
       .metric b { font-size:11px; color:#f8fafc; }
       .alert { margin-top:10px; border-radius:10px; padding:8px 9px; color:#fecdd3; background:rgba(190,24,93,.18); border:1px solid rgba(251,113,133,.24); }
       .note { margin-top:9px; color:#94a3b8; font-weight:500; font-size:10px; }
+      .finish { width:100%; height:34px; margin-top:10px; border:1px solid rgba(251,113,133,.4); border-radius:10px;
+        color:#fff1f2; background:rgba(190,24,93,.28); font:800 11px/1 system-ui,sans-serif; cursor:pointer; pointer-events:auto; }
+      .finish:hover { background:rgba(225,29,72,.42); }.finish:disabled { opacity:.6; cursor:wait; }
     </style>
     <section class="card" aria-label="Look At Me proctoring status">
       <div class="top"><div class="status"><i class="dot"></i>${active ? 'PROCTORING ACTIVE' : state.status.replace('PROCTORING_', '')}</div><div class="brand">LOOK AT ME!</div></div>
@@ -91,8 +94,28 @@ const renderOverlay = (): void => {
         <div class="metric"><label>SCREENSHOTS</label><b>${state.evidenceCount}</b></div>
       </div>
       ${state.lastAlert ? `<div class="alert">⚠ ${state.lastAlert}</div>` : ''}
+      <button class="finish" type="button">Завершить тест</button>
       <div class="note">Local analysis · human review required</div>
     </section>`;
+  const finishButton = root.querySelector<HTMLButtonElement>('button.finish');
+  finishButton?.addEventListener('click', () => {
+    if (!state || !isSessionRunning(state.status)) return;
+    if (!window.confirm('Вы действительно хотите завершить тест?')) return;
+    finishButton.disabled = true;
+    finishButton.textContent = 'Завершение…';
+    void chrome.runtime.sendMessage({ type: 'content-finish-session', confirmed: true }).then((response) => {
+      if (response?.state) {
+        state = response.state as ExtensionSessionState;
+        renderOverlay();
+      } else if (!response?.accepted) {
+        finishButton.disabled = false;
+        finishButton.textContent = 'Завершить тест';
+      }
+    }).catch(() => {
+      finishButton.disabled = false;
+      finishButton.textContent = 'Завершить тест';
+    });
+  });
 };
 
 const readIntent = (): GoogleFormsIntent | null => {

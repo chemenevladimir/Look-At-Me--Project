@@ -62,6 +62,13 @@ describe('EventEngine', () => {
     expect(engine.summarize().score).toBe(23);
   });
 
+  it('preserves the measured episode start while using processing time for cooldowns', () => {
+    const engine = new EventEngine([], () => 10_500);
+    const event = engine.record({ ...directionEvent('HEAD_TURN', 1_200), timestamp: 9_300 });
+    expect(event?.timestamp).toBe(9_300);
+    expect(event?.duration).toBe(1_200);
+  });
+
   it('applies recurrence independently to head and gaze episode types', () => {
     let now = 1_000;
     const engine = new EventEngine([], () => now);

@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
@@ -58,6 +58,9 @@ for (const file of ['install_native_host.ps1', 'uninstall_native_host.ps1', 'com
   if (!existsSync(source)) throw new Error(`Missing native_host/${file}`);
   copyFileSync(source, join(nativeHostDistDir, file));
 }
+const vendorDir = join(nativeHostDir, 'vendor');
+if (existsSync(vendorDir)) cpSync(vendorDir, join(nativeHostDistDir, 'vendor'), { recursive: true });
 copyFileSync(join(rootDir, 'setup_windows.ps1'), join(distDir, 'setup_windows.ps1'));
+copyFileSync(join(rootDir, 'INSTALL_WINDOWS.cmd'), join(distDir, 'INSTALL_WINDOWS.cmd'));
 
 console.log('Copied extension assets and local security host package to dist/');

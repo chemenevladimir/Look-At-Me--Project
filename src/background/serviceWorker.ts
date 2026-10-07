@@ -30,13 +30,21 @@ let loadPromise: Promise<void> | null = null;
 let mutationQueue: Promise<unknown> = Promise.resolve();
 let nativePort: chrome.runtime.Port | null = null;
 let popupConnections = 0;
+let evidenceConnections = 0;
 let fullscreenRecoveryTimer: number | null = null;
+let fullscreenExitExpected = false;
+let nativeReconnectTimer: number | null = null;
+let nativeReconnectDelay = 2_000;
+let nativeEverAttempted = false;
 const nativeRequests = new Map<string, {
   resolve: (value: Record<string, unknown>) => void;
   reject: (error: Error) => void;
   timer: number;
 }>();
 const evidenceTasks = new Set<Promise<void>>();
+const storageTasks = new Set<Promise<void>>();
+let evidenceCaptureQueue: Promise<void> = Promise.resolve();
+let lastEvidenceCaptureAt = 0;
 let sessionFailures: string[] = [];
 
 const registerSessionFailure = (message: string): void => {
@@ -137,11 +145,66 @@ async function broadcastState(): Promise<void> {
   await sendStateToContent();
 }
 
+async function resolveCaptureWindowId(): Promise<number> {
+  if (session.currentTabId !== null) {
+    const monitoredTab = await chrome.tabs.get(session.currentTabId);
+    await chrome.windows.get(monitoredTab.windowId);
+    if (session.currentWindowId !== monitoredTab.windowId) {
+      session = { ...session, currentWindowId: monitoredTab.windowId };
+      await persist();
+    }
+    return monitoredTab.windowId;
+  }
+  const browserWindow = await chrome.windows.getLastFocused();
+  if (browserWindow.id === undefined) throw new Error('Chrome has no capturable browser window.');
+  return browserWindow.id;
+}
+
+async function activateMonitoredTabForCapture(): Promise<number> {
+  if (session.currentTabId === null) throw new Error('The monitored test tab is unavailable.');
+  const monitoredTabId = session.currentTabId;
+  let lastActiveTabId: number | undefined;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const monitoredTab: chrome.tabs.Tab = await chrome.tabs.get(monitoredTabId);
+    if (!isMonitorableUrl(monitoredTab.url)) throw new Error('The monitored test tab is no longer capturable.');
+    session = { ...session, currentWindowId: monitoredTab.windowId, currentTabUrl: monitoredTab.url };
+    await chrome.windows.update(monitoredTab.windowId, { focused: true });
+    await chrome.tabs.update(monitoredTabId, { active: true });
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    const [activeTab]: chrome.tabs.Tab[] = await chrome.tabs.query({ active: true, windowId: monitoredTab.windowId });
+    lastActiveTabId = activeTab?.id;
+    if (activeTab?.id === monitoredTabId) {
+      await persist();
+      return monitoredTab.windowId;
+    }
+  }
+  throw new Error(`Chrome did not activate the monitored test tab before capture (active tab: ${lastActiveTabId ?? 'none'}).`);
+}
+
+async function captureVisiblePng(): Promise<string> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const windowId = await resolveCaptureWindowId();
+      const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
+      if (dataUrl.startsWith('data:image/png;base64,')) return dataUrl;
+      throw new Error('Chrome returned an unsupported screenshot format.');
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 700));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Chrome could not capture the visible tab.');
+}
+
 async function captureEvidenceForEvent(event: ProctorEvent, sessionId: string): Promise<void> {
   try {
+    const waitMs = Math.max(0, 650 - (Date.now() - lastEvidenceCaptureAt));
+    if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+    lastEvidenceCaptureAt = Date.now();
     if (!await hasOffscreenDocument()) throw new Error('The offscreen camera context is unavailable.');
-    if (session.currentWindowId === null) throw new Error('The monitored Chrome window is unavailable.');
-    const dataUrl = await chrome.tabs.captureVisibleTab(session.currentWindowId, { format: 'png' });
+    await activateMonitoredTabForCapture();
+    const dataUrl = await captureVisiblePng();
     const prefix = 'data:image/png;base64,';
     if (!dataUrl.startsWith(prefix)) throw new Error('Chrome returned an unsupported screenshot format.');
     const response = await sendToOffscreen({
@@ -183,15 +246,70 @@ async function captureEvidenceForEvent(event: ProctorEvent, sessionId: string): 
   }
 }
 
+async function captureFinalScreenshot(sessionId: string, timestamp: number): Promise<string> {
+  const waitMs = Math.max(0, 650 - (Date.now() - lastEvidenceCaptureAt));
+  if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+  lastEvidenceCaptureAt = Date.now();
+  if (!await hasOffscreenDocument()) throw new Error('The offscreen camera context is unavailable.');
+  await activateMonitoredTabForCapture();
+  const dataUrl = await captureVisiblePng();
+  const prefix = 'data:image/png;base64,';
+  if (!dataUrl.startsWith(prefix)) throw new Error('Chrome returned an unsupported screenshot format.');
+  const response = await sendToOffscreen({
+    type: 'compose-evidence',
+    pageFrame: { data: dataUrl.slice(prefix.length), mimeType: 'image/png' },
+    eventType: 'FINAL SCREENSHOT',
+    timestamp,
+    final: true,
+    score: session.activityScore,
+    status: 'COMPLETED',
+  }) as { captured?: boolean; error?: string; frame?: { data?: string; mimeType?: string } };
+  if (!response.captured || !response.frame?.data || response.frame.mimeType !== 'image/png') {
+    throw new Error(response.error || 'The final test-and-camera screenshot was not created.');
+  }
+  const result = await nativeRequest({
+    type: 'storage-final-screenshot-save',
+    sessionId,
+    data: response.frame.data,
+    mimeType: response.frame.mimeType,
+  }, 10_000);
+  const name = safeText(result.screenshotName, 160);
+  if (!name) throw new Error('The helper did not return a final screenshot filename.');
+  return name;
+}
+
+function trackStorageTask(task: Promise<void>): void {
+  storageTasks.add(task);
+  void task.finally(() => storageTasks.delete(task));
+}
+
+async function persistEventToHelper(event: ProctorEvent, sessionId: string): Promise<void> {
+  try {
+    await nativeRequest({
+      type: 'storage-event-upsert',
+      sessionId,
+      event: serializeViolation(event),
+    }, 5_000);
+  } catch (error) {
+    const message = `Event metadata could not be saved: ${error instanceof Error ? error.message : String(error)}`;
+    registerSessionFailure(message);
+    if (session.sessionId === sessionId) {
+      session = { ...session, storageStatus: 'ERROR', error: message };
+      await broadcastState();
+    }
+  }
+}
+
 async function recordEventInternal(input: EventInput): Promise<ProctorEvent | null> {
   const event = engine.record(input);
   if (!event) return null;
   session = applySummary(session, engine.summarize(), event);
   await broadcastState();
+  if (session.sessionId) trackStorageTask(persistEventToHelper(event, session.sessionId));
   if (shouldCaptureScreenshot(event) && session.sessionId) {
     const sessionId = session.sessionId;
-    const task = new Promise<void>((resolve) => setTimeout(resolve, 0))
-      .then(() => captureEvidenceForEvent(event, sessionId));
+    const task = evidenceCaptureQueue.then(() => captureEvidenceForEvent(event, sessionId));
+    evidenceCaptureQueue = task.catch(() => undefined);
     evidenceTasks.add(task);
     void task.finally(() => evidenceTasks.delete(task));
   }
@@ -203,6 +321,7 @@ async function updateEventInternal(id: string, update: EventProgressUpdate): Pro
   if (!event) return null;
   session = applySummary(session, engine.summarize(), event);
   await broadcastState();
+  if (session.sessionId) trackStorageTask(persistEventToHelper(event, session.sessionId));
   return event;
 }
 
@@ -249,6 +368,7 @@ function emitAgentStatus(
 ): void {
   void enqueue(async () => {
     await ensureLoaded();
+    if (session.localAgentState === state && session.localAgentMessage === message) return;
     session = { ...session, localAgentState: state, localAgentMessage: message };
     await broadcastState();
   });
@@ -271,7 +391,18 @@ function disconnectNativeAgent(sendShutdown = true): void {
   }
 }
 
-function nativeRequest(message: Record<string, unknown>, timeoutMs = 20_000): Promise<Record<string, unknown>> {
+function scheduleNativeReconnect(): void {
+  if (nativeReconnectTimer !== null || nativePort) return;
+  if (!isSessionRunning(session.status) && popupConnections === 0 && evidenceConnections === 0) return;
+  const delay = nativeReconnectDelay;
+  nativeReconnectTimer = setTimeout(() => {
+    nativeReconnectTimer = null;
+    connectNativeAgent();
+  }, delay) as unknown as number;
+  nativeReconnectDelay = Math.min(30_000, Math.round(nativeReconnectDelay * 1.8));
+}
+
+function nativeRequest(message: Record<string, unknown>, timeoutMs = 5_000): Promise<Record<string, unknown>> {
   connectNativeAgent();
   const port = nativePort;
   if (!port) return Promise.reject(new Error('The local evidence helper is unavailable.'));
@@ -295,7 +426,14 @@ function nativeRequest(message: Record<string, unknown>, timeoutMs = 20_000): Pr
 function connectNativeAgent(forceRestart = false): void {
   if (forceRestart) disconnectNativeAgent();
   if (nativePort) return;
-  emitAgentStatus('connecting', 'Connecting to the registered Windows security host…');
+  if (nativeReconnectTimer !== null) {
+    clearTimeout(nativeReconnectTimer);
+    nativeReconnectTimer = null;
+  }
+  if (forceRestart || !nativeEverAttempted) {
+    emitAgentStatus('connecting', 'Connecting to the registered Windows security host…');
+  }
+  nativeEverAttempted = true;
   try {
     const port = chrome.runtime.connectNative(NATIVE_HOST);
     nativePort = port;
@@ -310,6 +448,7 @@ function connectNativeAgent(forceRestart = false): void {
         if (value.ok === true) pending.resolve((value.result as Record<string, unknown>) ?? {});
         else pending.reject(new Error(safeText(value.error, 800) ?? 'The local evidence helper rejected the request.'));
       } else if (value.type === 'ready' || value.type === 'status') {
+        nativeReconnectDelay = 2_000;
         const rawState = safeText(value.state, 32) ?? (value.type === 'ready' ? 'ready' : 'error');
         const allowed = new Set(['unavailable', 'connecting', 'ready', 'active', 'stopped', 'error']);
         emitAgentStatus(
@@ -342,11 +481,13 @@ function connectNativeAgent(forceRestart = false): void {
       }
       const reason = chrome.runtime.lastError?.message ?? 'Native host closed the connection.';
       emitAgentStatus('unavailable', `Local security agent unavailable: ${reason}`);
+      scheduleNativeReconnect();
     });
     port.postMessage({ type: isSessionRunning(session.status) ? 'start' : 'capabilities', sessionId: session.sessionId });
   } catch (error) {
     nativePort = null;
     emitAgentStatus('error', `Local security agent could not start: ${error instanceof Error ? error.message : String(error)}`);
+    scheduleNativeReconnect();
   }
 }
 
@@ -437,6 +578,15 @@ async function startSession(options: StartSessionOptions): Promise<ExtensionSess
     const storage = await nativeRequest({
       type: 'storage-initialize',
     });
+    await nativeRequest({
+      type: 'storage-session-start',
+      session: {
+        id: session.sessionId,
+        studentName: session.studentName,
+        testName: session.testName,
+        startedAt: session.startTime,
+      },
+    });
     session = {
       ...session,
       storageStatus: 'READY',
@@ -476,6 +626,8 @@ async function startSession(options: StartSessionOptions): Promise<ExtensionSess
 async function finalizeSession(reason: 'manual' | 'google-forms' | 'error' | 'interrupted'): Promise<ExtensionSessionState> {
   await ensureLoaded();
   if (!isSessionRunning(session.status)) return session;
+  if (session.status === 'PROCTORING_FINALIZING') return session;
+  fullscreenExitExpected = true;
   session = {
     ...session,
     status: 'PROCTORING_FINALIZING',
@@ -487,6 +639,19 @@ async function finalizeSession(reason: 'manual' | 'google-forms' | 'error' | 'in
         : 'Finalizing the local session…',
   };
   await broadcastState();
+
+  try {
+    if (await hasOffscreenDocument()) {
+      const flush = await sendToOffscreen({ type: 'engine-flush-events' }) as {
+        updates?: Array<{ id?: string; update?: EventProgressUpdate }>;
+      };
+      for (const item of flush.updates ?? []) {
+        if (typeof item.id === 'string' && item.update) await updateEventInternal(item.id, item.update);
+      }
+    }
+  } catch (error) {
+    registerSessionFailure(`Long-event finalization warning: ${error instanceof Error ? error.message : String(error)}`);
+  }
 
   if (reason === 'google-forms') {
     await recordEventInternal({
@@ -511,7 +676,17 @@ async function finalizeSession(reason: 'manual' | 'google-forms' | 'error' | 'in
     source: 'system',
   });
 
-  await Promise.allSettled([...evidenceTasks]);
+  await Promise.allSettled([...storageTasks, ...evidenceTasks]);
+  if ((reason === 'manual' || reason === 'google-forms') && session.sessionId) {
+    try {
+      const finalScreenshotName = await captureFinalScreenshot(session.sessionId, endedAt);
+      session = { ...session, finalScreenshotName, storageStatus: 'SAVING' };
+      await broadcastState();
+    } catch (error) {
+      registerSessionFailure(`Final screenshot could not be saved: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   let finalStatus: 'COMPLETED' | 'ERROR' | 'INTERRUPTED' = reason === 'error' || sessionFailures.length
     ? 'ERROR'
     : reason === 'interrupted'
@@ -525,10 +700,30 @@ async function finalizeSession(reason: 'manual' | 'google-forms' | 'error' | 'in
     warnings.push(`CV shutdown warning: ${error instanceof Error ? error.message : String(error)}`);
   }
 
+  if (session.sessionId) {
+    try {
+      await nativeRequest({
+        type: 'storage-session-finish',
+        sessionId: session.sessionId,
+        session: {
+          endedAt,
+          durationSeconds: Math.max(0, (endedAt - (session.startTime ?? endedAt)) / 1_000),
+          activityScore: session.activityScore,
+          violationsCount: engine.getEvents().filter((event) => event.scoreImpact > 0).length,
+          status: finalStatus,
+        },
+      }, 5_000);
+    } catch (error) {
+      warnings.push(`Session metadata warning: ${error instanceof Error ? error.message : String(error)}`);
+      finalStatus = 'ERROR';
+    }
+  }
+
   session = { ...session, storageStatus: finalStatus === 'ERROR' ? 'ERROR' : 'SAVED' };
   nativePort?.postMessage({ type: 'stop', sessionId: session.sessionId });
   session = { ...session, fullscreenStatus: 'IDLE' };
   await restoreWindowState();
+  fullscreenExitExpected = false;
   session = {
     ...session,
     status: finalStatus === 'COMPLETED' ? 'PROCTORING_COMPLETED' : 'PROCTORING_ERROR',
@@ -536,7 +731,7 @@ async function finalizeSession(reason: 'manual' | 'google-forms' | 'error' | 'in
     faceStatus: 'UNKNOWN',
     aiStatus: 'IDLE',
     proctoringStatus: finalStatus === 'COMPLETED'
-      ? 'Session completed. Violation screenshots and their SQLite index were saved locally.'
+      ? `Session completed. ${session.finalScreenshotName ?? 'Final screenshot'} and event metadata were saved locally.`
       : finalStatus === 'INTERRUPTED'
         ? 'The interrupted session ended; available violation screenshots remain saved locally.'
         : 'Session ended with a local screenshot storage or runtime error.',
@@ -584,16 +779,25 @@ async function restoreRuntime(): Promise<void> {
 }
 
 chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== POPUP_PORT) return;
-  popupConnections += 1;
-  void enqueue(async () => {
-    await ensureLoaded();
-    port.postMessage({ type: 'session-state', state: session });
-    if (isSessionRunning(session.status)) connectNativeAgent();
-  });
-  port.onDisconnect.addListener(() => {
-    popupConnections = Math.max(0, popupConnections - 1);
-  });
+  if (port.name === POPUP_PORT) {
+    popupConnections += 1;
+    void enqueue(async () => {
+      await ensureLoaded();
+      port.postMessage({ type: 'session-state', state: session });
+      connectNativeAgent();
+    });
+    port.onDisconnect.addListener(() => { popupConnections = Math.max(0, popupConnections - 1); });
+    return;
+  }
+  if (port.name === 'look-at-me-evidence') {
+    evidenceConnections += 1;
+    void enqueue(async () => {
+      await ensureLoaded();
+      port.postMessage({ type: 'session-state', state: session });
+      connectNativeAgent();
+    });
+    port.onDisconnect.addListener(() => { evidenceConnections = Math.max(0, evidenceConnections - 1); });
+  }
 });
 
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
@@ -639,6 +843,10 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       if (!eventId) return { error: 'A valid event ID is required.' };
       return nativeRequest({ type: 'storage-delete-violation', eventId });
     }
+    if (value.type === 'evidence-open-screenshots') {
+      if (!fromEvidencePage) return { error: 'The screenshots folder can be opened only from the extension evidence page.' };
+      return nativeRequest({ type: 'storage-open-screenshots' });
+    }
     if (value.type === 'content-ready') {
       if (sender.tab?.id === session.currentTabId && isSessionRunning(session.status)) {
         if (isMonitorableUrl(sender.tab.url)) {
@@ -671,6 +879,11 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
         && new URL(sender.tab.url).pathname.startsWith('/forms/');
       if (!validSender || value.confirmed !== true || value.sessionId !== session.sessionId) return { accepted: false };
       return { accepted: true, state: await finalizeSession('google-forms') };
+    }
+    if (value.type === 'content-finish-session') {
+      const validSender = sender.tab?.id === session.currentTabId && isSessionRunning(session.status);
+      if (!validSender || value.confirmed !== true) return { accepted: false };
+      return { accepted: true, state: await finalizeSession('manual') };
     }
     if (value.target === 'background' && value.type === 'engine-event') {
       if (!fromOffscreen) return { event: null, error: 'untrusted-engine-sender' };
@@ -756,7 +969,7 @@ chrome.windows.onBoundsChanged.addListener((changedWindow) => {
     const enforce = session.status === 'PROCTORING_STARTING'
       || session.status === 'PROCTORING_ACTIVE'
       || session.status === 'PROCTORING_PAUSED';
-    if (!enforce || changedWindow.id !== session.currentWindowId) return;
+    if (!enforce || fullscreenExitExpected || changedWindow.id !== session.currentWindowId) return;
     if (changedWindow.state === 'fullscreen') {
       if (session.fullscreenStatus !== 'ACTIVE') {
         session = { ...session, fullscreenStatus: 'ACTIVE' };

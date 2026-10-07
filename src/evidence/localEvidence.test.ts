@@ -8,11 +8,17 @@ const phone: ProctorEvent = {
 };
 
 describe('local evidence metadata', () => {
-  it('serializes the minimum SQLite violation link', () => {
+  it('serializes the complete durable event metadata', () => {
     expect(serializeViolation(phone)).toEqual({
       id: phone.id,
       type: 'PHONE_DETECTED',
       timestamp: 12_500,
+      duration: 800,
+      confidence: 0.94,
+      severity: 8,
+      scoreImpact: 18,
+      explanation: 'Possible phone.',
+      source: 'cv',
     });
   });
 

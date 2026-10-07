@@ -321,7 +321,7 @@ Phase 30C. In-tab MV3 Session Architecture [~]
 - [x] Python integration: ready → ping/pong → start → active → stop → stopped → shutdown passed;
 - [x] Windows smoke: `keyboard` global hook start/unhook and foreground process probe passed;
 - [x] build packages host, requirements and install/uninstall scripts under `dist/native-host/`;
-- [x] native host registered for the installed unpacked extension ID `modeenlenlcffbfmgakibilblmckcngb` under the current-user Chrome registry scope;
+- [x] native host registered for the runtime-assigned unpacked extension ID under the current-user Chrome registry scope;
 - [x] installed Chrome extension established the real Native Messaging process and received `native heartbeat` from the packaged Python host;
 - [x] a live monitoring session changed the local agent to `active`; `APP_SWITCH` arrived with `source: system`, while `TAB_SWITCH` and `WINDOW_BLUR` arrived with `source: browser`, and all three updated the unified timeline and Activity Score;
 - [x] browser copy observation created `COPY_ATTEMPT`, fullscreen exit and session stop remained visible and recoverable;
@@ -356,7 +356,7 @@ Phase 33. Screenshot-only local evidence policy [x]
 - один реальный PNG на подтверждённое значимое нарушение;
 - visible test page + current live-camera frame → один composite PNG;
 - camera inset содержит label типа нарушения и точное локальное время;
-- `Documents\LookAtMeViolations\screenshots\imageNNN.png`;
+- `Documents\LookAtMe\screenshots\imageNNN.png`;
 - без WebM, session JSON и per-session каталогов.
 
 Phase 34. Evidence Viewer [~]
@@ -561,7 +561,7 @@ Verification record for BLOCK 6 (2026-10-05):
 - Windows foreground probe returned the active process with window titles disabled;
 - service worker/content script JavaScript and installer PowerShell syntax passed;
 - production Security Monitoring UI inspected in responsive preview;
-- Этот ранний пункт superseded последующей регистрацией host для ID `modeenlenlcffbfmgakibilblmckcngb` и installed-Chrome Native Messaging smoke выше.
+- Этот ранний пункт superseded последующей регистрацией host для runtime-assigned ID и installed-Chrome Native Messaging smoke выше.
 
 Verification record for the in-tab MV3 refactor (2026-10-05):
 
@@ -572,7 +572,7 @@ Verification record for the in-tab MV3 refactor (2026-10-05):
 - production build — passed; `dist/manifest.json` uses `background.js`, `popup.html`, `content.js`, `offscreen` plus justified `scripting` permission and only HTTP(S) host permissions;
 - JavaScript syntax checks for background/content/popup/offscreen bundles — passed;
 - production bundle contains no `index.html`; MediaPipe/ORT resources and YOLOv8n are packaged; source/dist YOLO SHA-256 matches;
-- native host was reinstalled after the final build for extension ID `modeenlenlcffbfmgakibilblmckcngb`;
+- native host was reinstalled after the final build for the runtime-assigned extension ID;
 - installed-Chrome close/reopen is now verified by the 2026-10-07 runtime smoke; live Google Forms submission remains `[~]` and is not claimed as completed.
 
 Verification record for local screenshot evidence (2026-10-07):
@@ -583,9 +583,36 @@ Verification record for local screenshot evidence (2026-10-07):
 - Native Messaging `--exercise-storage` — passed for source host and registered host;
 - production build — passed; manifest no longer includes `tabCapture`, and no MediaRecorder module is bundled;
 - installed Chrome-for-Testing runtime — passed: same active session after popup close/reopen, camera `ON`, AI `ACTIVE`, native agent `active`, fullscreen `ACTIVE`, final status `COMPLETED`;
-- three successive runtime sessions created nine non-empty PNG files and `violations.db` directly in `C:\Users\мама\Documents\LookAtMeViolations` without overwrite; SQLite integrity was `ok`, and the latest composite set links `FACE_NOT_DETECTED`, `TAB_SWITCH`, and `WINDOW_BLUR` to `image007.png`–`image009.png`;
+- three successive runtime sessions created nine non-empty PNG files and the SQLite evidence store in the current Windows Documents Known Folder without overwrite; SQLite integrity was `ok`, and the latest composite set links `FACE_NOT_DETECTED`, `TAB_SWITCH`, and `WINDOW_BLUR` to `image007.png`–`image009.png`;
 - popup camera preview, fullscreen, overlay, popup close/reopen persistence and composite screenshot storage are mandatory runtime-smoke assertions;
 - live Google Forms submit remains unverified and keeps Block 6 at `[~]`.
+
+Release stabilization update (2026-10-07):
+
+- popup now exposes explicit `NOT READY / READY / TESTING / FINISHING / COMPLETED / ERROR` product states and one confirmed `Завершить тест` action;
+- normal finish sets an expected fullscreen-exit guard only for finalization, flushes the active head/gaze episode, creates `finalNNN.png` while the camera is live, commits the session and then leaves fullscreen;
+- Chrome runtime proved that normal finish did not add a `FULLSCREEN_EXIT` event;
+- Face Mesh target interval restored to ~120 ms, popup camera preview to ~350 ms, while YOLO retains an independent ~600 ms loop and all pipelines skip overlapping inference;
+- long direction events keep one Event Engine/SQLite ID, measured start/end and growing duration/score; 12.4-second persistence is covered by the real SQLite store test;
+- SQLite now has durable `sessions` and `events` tables; the old `violations` schema is migrated without deleting earlier PNG evidence;
+- evidence viewer shows helper Online/Offline, time, duration, confidence, severity, score impact, source, session and screenshot name; reconnect uses one exponential timer capped at 30 seconds;
+- installer auto-detected the unpacked extension ID from the actual `dist` path and registered the host successfully without a hard-coded owner ID;
+- bundled `keyboard==0.13.5` wheel removes the helper installer's network dependency; runtime paths use `%LOCALAPPDATA%` and the Windows Documents Known Folder rather than an owner-specific path;
+- `pnpm typecheck` passed; Vitest 10 files / 35 tests passed; Python unittest 10 tests passed; source and registered Native Messaging storage protocol passed;
+- production build passed; automated Chrome-for-Testing runtime passed with camera `ON`, AI `ACTIVE`, popup close/reopen persistence, live preview, fullscreen, SQLite evidence, `final001.png`, row+PNG deletion and graceful fullscreen exit;
+- repository dependency/cache cleanup removes tracked `node_modules`, `.agent-deps`, Python caches, TypeScript build info and generated machine artifacts; `dist`, local models, bundled wheel and installers remain versioned for direct jury use;
+- Phase 34/35 and Block 7 remain `[~]` because inline PNG preview, filters and retention limits are still roadmap work; Block 6 remains `[~]` until live Google Forms submit is manually exercised.
+
+P0 portability and evidence verification (2026-10-08):
+
+- the existing in-page Shadow DOM overlay now contains a confirmed `Завершить тест` action; Chrome runtime completed the session from this button, flushed events, saved `final001.png`, removed monitoring and exited fullscreen without adding `FULLSCREEN_EXIT`;
+- every evidence attempt resolves the monitored tab and its current `windowId`, focuses the actual window, activates the tab and verifies it is active before `captureVisibleTab`; this removes reliance on the stale session window ID that caused `No window with id`;
+- final screenshot visual QA confirmed the test page, live proctoring overlay, Activity Score, event count, camera/AI state, finish button, final banner and real camera inset in one PNG;
+- the portable store is now `Documents\LookAtMe\database.db` with `screenshots` and the reserved `recordings` directory; the former `LookAtMeViolations` database and PNG directory are moved once into the new location without creating a second active database;
+- `events.screenshot_path` stores the real absolute PNG path in addition to the filename, and the evidence viewer can ask the existing Native Messaging helper to open the dynamic screenshots folder in Windows Explorer;
+- the Python installer now discovers `py`, `python`, a previously registered Look At Me! interpreter, Python registry installs, or per-user Python installs; the bundled `keyboard` wheel still requires no network;
+- automated extension runtime verified the complete chain `event → composite PNG → SQLite row/path`, popup close/reopen persistence, overlay finish, final PNG, readable viewer, deletion and graceful fullscreen exit against `database.db`;
+- Blocks 6 and 7 remain `[~]` for the already documented live Google Forms, filter/preview and retention work; no unverified phase was promoted to `[x]`.
 
 ---
 
