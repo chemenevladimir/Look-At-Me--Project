@@ -431,27 +431,26 @@
   }
   async function captureEvidenceForEvent(event, sessionId) {
     try {
-      let frame;
-      if (event.source === "cv") {
-        if (!await hasOffscreenDocument()) throw new Error("The offscreen camera context is unavailable.");
-        const response = await sendToOffscreen({ type: "capture-evidence" });
-        if (!response.captured || !response.frame?.data || response.frame.mimeType !== "image/png") {
-          throw new Error(response.error || "No camera frame was returned.");
-        }
-        frame = { data: response.frame.data, mimeType: "image/png" };
-      } else {
-        if (session.currentWindowId === null) throw new Error("The monitored Chrome window is unavailable.");
-        const dataUrl = await chrome.tabs.captureVisibleTab(session.currentWindowId, { format: "png" });
-        const prefix = "data:image/png;base64,";
-        if (!dataUrl.startsWith(prefix)) throw new Error("Chrome returned an unsupported screenshot format.");
-        frame = { data: dataUrl.slice(prefix.length), mimeType: "image/png" };
+      if (!await hasOffscreenDocument()) throw new Error("The offscreen camera context is unavailable.");
+      if (session.currentWindowId === null) throw new Error("The monitored Chrome window is unavailable.");
+      const dataUrl = await chrome.tabs.captureVisibleTab(session.currentWindowId, { format: "png" });
+      const prefix = "data:image/png;base64,";
+      if (!dataUrl.startsWith(prefix)) throw new Error("Chrome returned an unsupported screenshot format.");
+      const response = await sendToOffscreen({
+        type: "compose-evidence",
+        pageFrame: { data: dataUrl.slice(prefix.length), mimeType: "image/png" },
+        eventType: event.type,
+        timestamp: event.timestamp
+      });
+      if (!response.captured || !response.frame?.data || response.frame.mimeType !== "image/png") {
+        throw new Error(response.error || "The combined test-and-camera evidence frame was not created.");
       }
       const result = await nativeRequest({
         type: "storage-violation-save",
         sessionId,
         event: serializeViolation(event),
-        data: frame.data,
-        mimeType: frame.mimeType
+        data: response.frame.data,
+        mimeType: response.frame.mimeType
       });
       if (session.sessionId === sessionId) {
         session = {

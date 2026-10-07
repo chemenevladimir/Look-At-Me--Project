@@ -58,5 +58,6 @@ for (const file of ['install_native_host.ps1', 'uninstall_native_host.ps1', 'com
   if (!existsSync(source)) throw new Error(`Missing native_host/${file}`);
   copyFileSync(source, join(nativeHostDistDir, file));
 }
+copyFileSync(join(rootDir, 'setup_windows.ps1'), join(distDir, 'setup_windows.ps1'));
 
 console.log('Copied extension assets and local security host package to dist/');

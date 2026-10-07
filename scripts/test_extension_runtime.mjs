@@ -271,6 +271,10 @@ try {
   if (restored?.['look-at-me.session']?.sessionId !== sessionId || restored?.['look-at-me.session']?.status !== 'PROCTORING_ACTIVE') {
     throw new Error(`Popup reopen lost the active session: ${JSON.stringify(restored)}`);
   }
+  const popupCameraVisible = await waitFor(
+    () => evaluate(client, popup.sessionId, `document.querySelector('.camera-preview img')?.src?.startsWith('data:image/png;base64,') || false`),
+    'popup live camera preview',
+  );
 
   const contexts = await evaluate(client, workerSession, 'chrome.runtime.getContexts({contextTypes:["OFFSCREEN_DOCUMENT"]})');
   if (!contexts?.length) throw new Error('Offscreen document is not active after popup reopen.');
@@ -321,6 +325,7 @@ try {
     faceStatus: activeState.faceStatus,
     localAgentState: activeState.localAgentState,
     overlayVisible: /look at me/i.test(overlayText),
+    popupCameraVisible,
     fullscreenStatus: activeState.fullscreenStatus,
     popupReopenPreservedSession: true,
     nativeConnected: activeState.localAgentState === 'active',

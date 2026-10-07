@@ -5,7 +5,7 @@ Look At Me! is a local, explainable AI-proctoring prototype for browser-based as
 ## Current verified scope
 
 - React, TypeScript, Vite, and Chrome Extension Manifest V3 foundation.
-- A small toolbar popup with Start, confirmed Stop, timer, score, event count, camera/face/AI status, and restored session state. The sample quiz was removed from the extension UI.
+- A small toolbar popup with Start, confirmed Stop, live camera preview, timer, score, event count, camera/face/AI status, and restored session state. The sample quiz was removed from the extension UI.
 - Unified event model and event engine with per-type policy, cooldown, duration, confidence, repetition, and score breakdown.
 - `chrome.storage.local` persistence for the canonical extension session and events; the earlier IndexedDB module is retained for later evidence/dashboard migration.
 - Local MediaPipe Face Landmarker model and WASM assets; webcam frames are not uploaded.
@@ -23,7 +23,7 @@ Look At Me! is a local, explainable AI-proctoring prototype for browser-based as
 - Camera, MediaPipe, and YOLO run in an extension offscreen document and continue independently after the toolbar popup closes.
 - Google Forms finalization requires a fresh submit intent plus a confirmed `/formResponse` completion state for the active session.
 - Windows local security observer for Ctrl+C/V, Alt+Tab, Windows key, Print Screen, and foreground-process changes through Native Messaging.
-- Screenshot-only violation evidence: confirmed CV violations save a real camera frame, while browser/system violations save the visible Chrome tab.
+- Screenshot-only violation evidence: every confirmed violation saves one composite PNG containing the visible test page and a labeled live-camera inset with the student.
 - A simple local SQLite index links violation time and type to sequential PNG names such as `image001.png`. No test video is recorded.
 
 Blocks 4 and 5 remain verified complete. Live head/gaze episodes, duration scoring, physical-phone detection, confidence, and immediate `PHONE_DETECTED` were exercised on the current Windows setup. The installed Chrome-to-Native-Messaging-to-Python route, popup close/reopen persistence, fullscreen entry, real camera/CV state, and physical PNG/SQLite evidence were exercised on the latest `dist`. A live Google Forms completion check is still open, so Block 6 remains `[~]` in the roadmap.
@@ -58,11 +58,13 @@ Native Messaging registration needs the concrete 32-character ID assigned by Chr
 
 1. Install Python 3.10 or newer.
 2. Copy the extension ID from `chrome://extensions`.
-3. Register the current-user native host. Pass the absolute Python path when Python is not available in `PATH`:
+3. From the downloaded repository, run the setup wrapper. It accepts the extension ID copied in step 2 and registers the local screenshot helper for the current Windows user:
 
    ```powershell
-   .\native_host\install_native_host.ps1 -ExtensionId <32-character-extension-id> -PythonPath <absolute-path-to-python.exe>
+   .\setup_windows.ps1 -ExtensionId <32-character-extension-id>
    ```
+
+   If Python is not available in `PATH`, add `-PythonPath <absolute-path-to-python.exe>`. The lower-level `native_host\install_native_host.ps1` remains available for advanced installation.
 
 4. Reload the unpacked extension and start monitoring. The Security Monitoring panel must change the local-agent state from `connecting` to `ready` and then `active`.
 
@@ -82,7 +84,7 @@ Documents/
         └── ...
 ```
 
-`violations.db` contains one `violations` table. Every saved row includes the exact UTC violation time, event type, and matching screenshot filename, plus event/session IDs used to avoid duplicates. The extension does not create WebM files, session JSON exports, or per-session file trees. See `docs/LOCAL_EVIDENCE.md` for the schema and verification commands.
+`violations.db` contains one `violations` table. Every saved row includes the exact UTC violation time, event type, and matching screenshot filename, plus event/session IDs used to avoid duplicates. Each PNG shows the test page and the live camera together. The extension does not create WebM files, session JSON exports, or per-session file trees. See `docs/LOCAL_EVIDENCE.md` for the schema and verification commands.
 
 ## Models and privacy
 

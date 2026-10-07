@@ -42,14 +42,16 @@ CV / browser / system observation
         ↓
 single Event Engine
         ↓ confirmed scored violation
-camera frame (CV) or visible-tab frame (browser/system)
+visible test page + current live-camera frame
+        ↓ offscreen canvas composition
+single PNG with student camera inset
         ↓ PNG base64 over Native Messaging
 local_evidence_store.py
         ├─ atomic screenshots/imageNNN.png write
         └─ SQLite transaction linking time, type and filename
 ```
 
-The filename number comes from SQLite's monotonic row ID, so a restart or new proctoring session does not overwrite older screenshots. The helper accepts only bounded payloads with the PNG signature. It writes a temporary file, calls `fsync`, and atomically replaces the final filename before committing the database row. A failed transaction removes the incomplete image.
+The composite keeps the test page as the background and places a mirrored, labeled live-camera inset in the lower-right area so the violation context and student are visible together. The filename number comes from SQLite's monotonic row ID, so a restart or new proctoring session does not overwrite older screenshots. The helper accepts only bounded payloads with the PNG signature. It writes a temporary file, calls `fsync`, and atomically replaces the final filename before committing the database row. A failed transaction removes the incomplete image.
 
 ## Verification
 

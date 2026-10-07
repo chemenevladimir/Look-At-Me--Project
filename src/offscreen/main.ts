@@ -1,6 +1,7 @@
-import { ProctoringEngine, type ProctoringEngineStatus } from '../proctoring/ProctoringEngine';
+import { ProctoringEngine, type CameraEvidenceFrame, type ProctoringEngineStatus } from '../proctoring/ProctoringEngine';
 import type { EventInput, EventProgressUpdate } from '../lib/eventEngine';
 import type { ProctorEvent } from '../types';
+import { composeEvidencePng } from '../evidence/composeEvidence';
 
 const send = async <T>(message: unknown): Promise<T> => chrome.runtime.sendMessage(message) as Promise<T>;
 
@@ -41,10 +42,26 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     });
     return true;
   }
-  if (message.type === 'capture-evidence') {
-    const frame = engine.captureFrame();
-    sendResponse(frame ? { captured: true, frame } : { captured: false, error: 'No current video frame is available.' });
-    return false;
+  if (message.type === 'compose-evidence') {
+    const pageFrame = message.pageFrame as CameraEvidenceFrame | undefined;
+    const cameraFrame = engine.captureFrame(640);
+    if (!pageFrame?.data || pageFrame.mimeType !== 'image/png') {
+      sendResponse({ captured: false, error: 'The visible test-page PNG is unavailable.' });
+      return false;
+    }
+    if (!cameraFrame) {
+      sendResponse({ captured: false, error: 'The live camera frame is unavailable.' });
+      return false;
+    }
+    void composeEvidencePng(
+      pageFrame,
+      cameraFrame,
+      typeof message.eventType === 'string' ? message.eventType : 'VIOLATION',
+      Number(message.timestamp) || Date.now(),
+    ).then((frame) => sendResponse({ captured: true, frame })).catch((error) => {
+      sendResponse({ captured: false, error: error instanceof Error ? error.message : String(error) });
+    });
+    return true;
   }
   if (message.type === 'camera-preview') {
     const frame = engine.captureFrame(420);

@@ -74,6 +74,6 @@
 
 ## ADR-013: Store screenshot-only evidence in Documents
 
-**Decision:** Do not record full-session or short-event video. For every confirmed scored violation, save one real PNG to `Documents\LookAtMeViolations\screenshots\imageNNN.png` and insert the violation time, type, and image filename into `Documents\LookAtMeViolations\violations.db`. Keep the Event Engine as the only event source and use the Native Messaging host for file/SQLite access.
+**Decision:** Do not record full-session or short-event video. For every confirmed scored violation, compose one real PNG containing the visible test page and a labeled current-camera inset, save it to `Documents\LookAtMeViolations\screenshots\imageNNN.png`, and insert the violation time, type, and image filename into `Documents\LookAtMeViolations\violations.db`. Keep the Event Engine as the only event source and use the Native Messaging host for file/SQLite access.
 
 **Reason:** The owner explicitly removed video recording and the earlier per-session JSON/WebM layout. Chrome extensions cannot write arbitrary local files or SQLite directly. A small native helper provides durable local evidence without cloud services, while one screenshot per confirmed event limits storage and preserves an explainable event-to-image relation.

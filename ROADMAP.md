@@ -354,8 +354,8 @@ Phase 33. Screenshot-only local evidence policy [x]
 
 - полная и короткая видеозапись отменена прямым решением владельца проекта;
 - один реальный PNG на подтверждённое значимое нарушение;
-- CV event → camera frame;
-- browser/system event → visible-tab frame;
+- visible test page + current live-camera frame → один composite PNG;
+- camera inset содержит label типа нарушения и точное локальное время;
 - `Documents\LookAtMeViolations\screenshots\imageNNN.png`;
 - без WebM, session JSON и per-session каталогов.
 
@@ -377,11 +377,13 @@ Phase 35. Evidence Management [~]
 Проверка BLOCK 7 screenshot storage (2026-10-07):
 
 - [x] один существующий Event Engine остаётся источником CV/browser/system нарушений;
-- [x] real runtime создал PNG camera evidence для `FACE_NOT_DETECTED` и visible-tab PNG для `TAB_SWITCH` / `WINDOW_BLUR`;
-- [x] сохранённый PNG визуально проверен: 800×544, текущая тестовая вкладка, Look At Me! overlay и `TAB SWITCH` alert;
+- [x] real runtime создал composite PNG (test page + camera inset) для `FACE_NOT_DETECTED`, `TAB_SWITCH` и `WINDOW_BLUR`;
+- [x] final composite PNG визуально проверен: 800×544, текущая тестовая вкладка, Look At Me! overlay, `TAB SWITCH` alert и live-camera inset в одном файле;
 - [x] SQLite физически создан и содержит UTC-время, тип и точное имя `image001.png` / `image002.png` / `image003.png`;
 - [x] повторное сохранение одного `event_id` не создаёт дубликат, новые нарушения получают следующий номер;
 - [x] видеозапись, `tabCapture`, `MediaRecorder`, WebM и JSON-экспорты сессий удалены;
+- [x] popup показывает живой camera preview во время активной сессии и не владеет camera/session lifecycle;
+- [x] `setup_windows.ps1` подготавливает скачанный GitHub checkout и регистрирует helper по фактическому unpacked extension ID;
 - [~] popup показывает последние события и число сохранённых изображений, но отдельный screenshot viewer, filters, deletion и storage limits ещё не реализованы.
 
 ---
@@ -573,12 +575,13 @@ Verification record for the in-tab MV3 refactor (2026-10-05):
 Verification record for local screenshot evidence (2026-10-07):
 
 - `pnpm typecheck` — passed;
-- Vitest — 9 files, 32 tests passed;
+- Vitest — 10 files, 34 tests passed, including composite screenshot layout;
 - Python unittest — 7 tests passed, including PNG validation, sequential naming, deduplication and SQLite relation;
 - Native Messaging `--exercise-storage` — passed for source host and registered host;
 - production build — passed; manifest no longer includes `tabCapture`, and no MediaRecorder module is bundled;
 - installed Chrome-for-Testing runtime — passed: same active session after popup close/reopen, camera `ON`, AI `ACTIVE`, native agent `active`, fullscreen `ACTIVE`, final status `COMPLETED`;
-- runtime created three non-empty valid PNG files and `violations.db` directly in `C:\Users\мама\Documents\LookAtMeViolations`; SQLite integrity was `ok`, and physical rows linked `FACE_NOT_DETECTED`, `TAB_SWITCH`, and `WINDOW_BLUR` to `image001.png`–`image003.png`;
+- three successive runtime sessions created nine non-empty PNG files and `violations.db` directly in `C:\Users\мама\Documents\LookAtMeViolations` without overwrite; SQLite integrity was `ok`, and the latest composite set links `FACE_NOT_DETECTED`, `TAB_SWITCH`, and `WINDOW_BLUR` to `image007.png`–`image009.png`;
+- popup camera preview, fullscreen, overlay, popup close/reopen persistence and composite screenshot storage are mandatory runtime-smoke assertions;
 - live Google Forms submit remains unverified and keeps Block 6 at `[~]`.
 
 ---
