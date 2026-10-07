@@ -35,6 +35,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--exercise-windows', action='store_true')
     parser.add_argument('--exercise-storage', action='store_true')
+    parser.add_argument('--exercise-open-folder', action='store_true')
     parser.add_argument(
         '--registered-host',
         action='store_true',
@@ -75,6 +76,21 @@ def main() -> int:
         pong = receive(process)
         if pong != {"type": "pong", "timestamp": 12345}:
             raise RuntimeError(f"Unexpected heartbeat: {pong}")
+
+        def request(message: dict[str, object]) -> dict[str, object]:
+            request_id = uuid.uuid4().hex
+            send(process, {**message, "requestId": request_id})
+            response = receive(process)
+            if response.get("type") != "storage-response" or response.get("replyTo") != request_id:
+                raise RuntimeError(f"Unexpected storage response: {response}")
+            if response.get("ok") is not True:
+                raise RuntimeError(f"Storage command failed: {response}")
+            return response.get("result") or {}
+
+        if args.exercise_open_folder:
+            opened = request({"type": "storage-open-screenshots"})
+            if opened.get("opened") is not True or opened.get("explorerStarted") is not True:
+                raise RuntimeError(f"Screenshots folder was not opened: {opened}")
         if args.exercise_windows:
             send(process, {"type": "start", "sessionId": "protocol-smoke"})
             active = receive(process)
@@ -87,16 +103,6 @@ def main() -> int:
         if args.exercise_storage:
             session_id = f"session_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
             started_at = int(time.time() * 1000)
-
-            def request(message: dict[str, object]) -> dict[str, object]:
-                request_id = uuid.uuid4().hex
-                send(process, {**message, "requestId": request_id})
-                response = receive(process)
-                if response.get("type") != "storage-response" or response.get("replyTo") != request_id:
-                    raise RuntimeError(f"Unexpected storage response: {response}")
-                if response.get("ok") is not True:
-                    raise RuntimeError(f"Storage command failed: {response}")
-                return response.get("result") or {}
 
             initialized = request({"type": "storage-initialize"})
             event_id = "PHONE_DETECTED-protocol-smoke"

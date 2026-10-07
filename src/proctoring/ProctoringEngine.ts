@@ -264,6 +264,14 @@ export class ProctoringEngine {
     });
   }
 
+  public freezeInference(): void {
+    this.active = false;
+    if (this.faceTimer !== null) window.clearInterval(this.faceTimer);
+    if (this.phoneTimer !== null) window.clearInterval(this.phoneTimer);
+    this.faceTimer = null;
+    this.phoneTimer = null;
+  }
+
   public getActiveDirectionProgress(): Array<{ id: string; update: EventProgressUpdate }> {
     const updates: Array<{ id: string; update: EventProgressUpdate }> = [];
     for (const type of ['HEAD_TURN', 'LOOKING_AWAY'] as const) {

@@ -360,6 +360,7 @@
   var evidenceCaptureQueue = Promise.resolve();
   var lastEvidenceCaptureAt = 0;
   var sessionFailures = [];
+  var isCollectingViolations = () => session.status === "PROCTORING_STARTING" || session.status === "PROCTORING_ACTIVE" || session.status === "PROCTORING_PAUSED";
   var registerSessionFailure = (message) => {
     if (!sessionFailures.includes(message)) sessionFailures = [...sessionFailures, message].slice(-20);
   };
@@ -446,20 +447,6 @@
     }
     await sendStateToContent();
   }
-  async function resolveCaptureWindowId() {
-    if (session.currentTabId !== null) {
-      const monitoredTab = await chrome.tabs.get(session.currentTabId);
-      await chrome.windows.get(monitoredTab.windowId);
-      if (session.currentWindowId !== monitoredTab.windowId) {
-        session = { ...session, currentWindowId: monitoredTab.windowId };
-        await persist();
-      }
-      return monitoredTab.windowId;
-    }
-    const browserWindow = await chrome.windows.getLastFocused();
-    if (browserWindow.id === void 0) throw new Error("Chrome has no capturable browser window.");
-    return browserWindow.id;
-  }
   async function activateMonitoredTabForCapture() {
     if (session.currentTabId === null) throw new Error("The monitored test tab is unavailable.");
     const monitoredTabId = session.currentTabId;
@@ -484,7 +471,7 @@
     let lastError;
     for (let attempt = 0; attempt < 4; attempt += 1) {
       try {
-        const windowId = await resolveCaptureWindowId();
+        const windowId = await activateMonitoredTabForCapture();
         const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
         if (dataUrl.startsWith("data:image/png;base64,")) return dataUrl;
         throw new Error("Chrome returned an unsupported screenshot format.");
@@ -501,7 +488,6 @@
       if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
       lastEvidenceCaptureAt = Date.now();
       if (!await hasOffscreenDocument()) throw new Error("The offscreen camera context is unavailable.");
-      await activateMonitoredTabForCapture();
       const dataUrl = await captureVisiblePng();
       const prefix = "data:image/png;base64,";
       if (!dataUrl.startsWith(prefix)) throw new Error("Chrome returned an unsupported screenshot format.");
@@ -544,7 +530,6 @@
     if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
     lastEvidenceCaptureAt = Date.now();
     if (!await hasOffscreenDocument()) throw new Error("The offscreen camera context is unavailable.");
-    await activateMonitoredTabForCapture();
     const dataUrl = await captureVisiblePng();
     const prefix = "data:image/png;base64,";
     if (!dataUrl.startsWith(prefix)) throw new Error("Chrome returned an unsupported screenshot format.");
@@ -590,7 +575,8 @@
       }
     }
   }
-  async function recordEventInternal(input) {
+  async function recordEventInternal(input, allowDuringFinalization = false) {
+    if (!allowDuringFinalization && !isCollectingViolations()) return null;
     const event = engine.record(input);
     if (!event) return null;
     session = applySummary(session, engine.summarize(), event);
@@ -605,7 +591,8 @@
     }
     return event;
   }
-  async function updateEventInternal(id, update) {
+  async function updateEventInternal(id, update, allowDuringFinalization = false) {
+    if (!allowDuringFinalization && !isCollectingViolations()) return null;
     const event = engine.updateEvent(id, update);
     if (!event) return null;
     session = applySummary(session, engine.summarize(), event);
@@ -738,7 +725,7 @@
             allowed.has(rawState) ? rawState : "error",
             safeText(value.message) ?? "Local security agent responded."
           );
-        } else if (value.type === "event" && isSessionRunning(session.status) && systemEventTypes.has(String(value.eventType))) {
+        } else if (value.type === "event" && isCollectingViolations() && systemEventTypes.has(String(value.eventType))) {
           const normalized = normalizeSecurityEvent({
             eventType: value.eventType,
             source: "system",
@@ -749,7 +736,7 @@
           });
           if (normalized) void enqueue(async () => {
             await ensureLoaded();
-            if (!isSessionRunning(session.status)) return;
+            if (!isCollectingViolations()) return;
             await recordEventInternal(normalized);
           });
         }
@@ -910,8 +897,9 @@
       if (await hasOffscreenDocument()) {
         const flush = await sendToOffscreen({ type: "engine-flush-events" });
         for (const item of flush.updates ?? []) {
-          if (typeof item.id === "string" && item.update) await updateEventInternal(item.id, item.update);
+          if (typeof item.id === "string" && item.update) await updateEventInternal(item.id, item.update, true);
         }
+        await sendToOffscreen({ type: "engine-freeze" });
       }
     } catch (error) {
       registerSessionFailure(`Long-event finalization warning: ${error instanceof Error ? error.message : String(error)}`);
@@ -924,7 +912,7 @@
         severity: 0,
         explanation: "Google Forms displayed a confirmed response-submitted page after a submit intent.",
         source: "browser"
-      });
+      }, true);
     }
     const endedAt = Date.now();
     await recordEventInternal({
@@ -934,7 +922,7 @@
       severity: 0,
       explanation: reason === "google-forms" ? "The local proctoring session finished after confirmed Google Forms submission." : reason === "interrupted" ? "The monitored test tab was closed before a confirmed submission." : reason === "error" ? "The local proctoring session stopped after a runtime error." : "The local proctoring session was stopped from the extension popup.",
       source: "system"
-    });
+    }, true);
     await Promise.allSettled([...storageTasks, ...evidenceTasks]);
     if ((reason === "manual" || reason === "google-forms") && session.sessionId) {
       try {
@@ -1084,6 +1072,12 @@
         if (!isSessionRunning(session.status) || !await hasOffscreenDocument()) return { available: false };
         return sendToOffscreen({ type: "camera-preview" });
       }
+      if (value.type === "overlay-camera-preview") {
+        if (sender.tab?.id !== session.currentTabId || !isSessionRunning(session.status) || !await hasOffscreenDocument()) {
+          return { available: false };
+        }
+        return sendToOffscreen({ type: "camera-preview" });
+      }
       if (value.type === "evidence-list") {
         if (!fromEvidencePage) return { error: "Evidence records are available only to the extension evidence page." };
         return nativeRequest({ type: "storage-list-violations", limit: 1e3 });
@@ -1109,7 +1103,7 @@
         return { state: null };
       }
       if (value.type === "page-security-event") {
-        if (!sender.tab || sender.tab.id !== session.currentTabId || !isSessionRunning(session.status)) return { accepted: false };
+        if (!sender.tab || sender.tab.id !== session.currentTabId || !isCollectingViolations()) return { accepted: false };
         if (popupConnections > 0 && value.eventType === "WINDOW_BLUR") return { accepted: false, reason: "popup-open" };
         const normalized = normalizeSecurityEvent({
           eventType: value.eventType,
@@ -1135,12 +1129,12 @@
       if (value.target === "background" && value.type === "engine-event") {
         if (!fromOffscreen) return { event: null, error: "untrusted-engine-sender" };
         const input = value.input;
-        if (!isSessionRunning(session.status) || !input || typeof input.type !== "string") return { event: null };
+        if (!isCollectingViolations() || !input || typeof input.type !== "string") return { event: null };
         return { event: await recordEventInternal(input) };
       }
       if (value.target === "background" && value.type === "engine-event-update") {
         if (!fromOffscreen) return { event: null, error: "untrusted-engine-sender" };
-        if (!isSessionRunning(session.status) || typeof value.id !== "string") return { event: null };
+        if (!isCollectingViolations() || typeof value.id !== "string") return { event: null };
         return { event: await updateEventInternal(value.id, value.update) };
       }
       if (value.target === "background" && value.type === "engine-status") {
@@ -1164,7 +1158,7 @@
   chrome.tabs.onActivated.addListener((activeInfo) => {
     void enqueue(async () => {
       await ensureLoaded();
-      if (!isSessionRunning(session.status) || session.currentTabId === null || activeInfo.tabId === session.currentTabId) return;
+      if (!isCollectingViolations() || session.currentTabId === null || activeInfo.tabId === session.currentTabId) return;
       await recordEventInternal({
         type: "TAB_SWITCH",
         duration: 0,
@@ -1179,7 +1173,7 @@
     if (changeInfo.status !== "complete") return;
     void enqueue(async () => {
       await ensureLoaded();
-      if (tabId !== session.currentTabId || !isSessionRunning(session.status)) return;
+      if (tabId !== session.currentTabId || !isCollectingViolations()) return;
       if (isMonitorableUrl(tab.url)) session = { ...session, currentTabUrl: tab.url };
       await broadcastState();
     });
@@ -1202,7 +1196,7 @@
   chrome.windows.onFocusChanged.addListener((windowId) => {
     void enqueue(async () => {
       await ensureLoaded();
-      if (!isSessionRunning(session.status) || popupConnections > 0) return;
+      if (!isCollectingViolations() || popupConnections > 0) return;
       if (windowId === chrome.windows.WINDOW_ID_NONE) {
         await recordEventInternal({
           type: "WINDOW_BLUR",

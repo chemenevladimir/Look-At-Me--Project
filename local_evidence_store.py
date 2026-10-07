@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
 import tempfile
 import threading
 from contextlib import closing
@@ -207,11 +208,24 @@ class LocalEvidenceStore:
         }
 
     def open_screenshots_folder(self) -> dict[str, Any]:
-        if os.name != "nt" or not hasattr(os, "startfile"):
+        if os.name != "nt":
             raise OSError("Opening the screenshots folder is supported only by the Windows helper.")
         self.screenshots_root.mkdir(parents=True, exist_ok=True)
-        os.startfile(str(self.screenshots_root))  # type: ignore[attr-defined]
-        return {**self.initialize(), "opened": True}
+        process = subprocess.Popen(
+            ["explorer.exe", str(self.screenshots_root)],
+            close_fds=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        try:
+            return_code = process.wait(timeout=0.35)
+        except subprocess.TimeoutExpired:
+            return_code = None
+        # Explorer commonly exits its launcher with code 1 after handing the
+        # folder to the already-running Windows shell. Popen itself failing is
+        # the reliable launch failure; 0 and 1 are both normal hand-off results.
+        if return_code not in (None, 0, 1):
+            raise OSError(f"Windows Explorer failed to open the screenshots folder (exit code {return_code}).")
+        return {**self.initialize(), "opened": True, "explorerStarted": True}
 
     def _next_screenshot_name(self, prefix: str) -> str:
         pattern = re.compile(rf"^{re.escape(prefix)}([0-9]+)\.png$")

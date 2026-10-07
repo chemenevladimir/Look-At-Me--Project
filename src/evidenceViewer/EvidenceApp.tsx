@@ -25,6 +25,7 @@ interface EvidenceResponse {
   dataRoot?: string;
   deleted?: boolean;
   opened?: boolean;
+  explorerStarted?: boolean;
   error?: string;
 }
 
@@ -81,6 +82,8 @@ export default function EvidenceApp() {
     };
   }, []);
 
+  useEffect(() => { void load(); }, [load]);
+
   useEffect(() => {
     const online = isOnline(helperState);
     if (online && !lastOnline.current) void load();
@@ -110,7 +113,7 @@ export default function EvidenceApp() {
     try {
       const response = await send({ type: 'evidence-open-screenshots' });
       if (response.error) throw new Error(response.error);
-      if (!response.opened) throw new Error('Helper не подтвердил открытие папки.');
+      if (!response.opened || !response.explorerStarted) throw new Error('Helper не подтвердил запуск Windows Explorer.');
     } catch (openError) {
       setError(openError instanceof Error ? openError.message : String(openError));
     } finally {

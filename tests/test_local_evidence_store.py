@@ -156,10 +156,14 @@ class LocalEvidenceStoreTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "Explorer integration is Windows-only")
     def test_opens_dynamic_screenshots_folder(self) -> None:
-        with mock.patch.object(os, "startfile") as startfile:
+        process = mock.Mock()
+        process.wait.return_value = 1
+        with mock.patch("local_evidence_store.subprocess.Popen", return_value=process) as popen:
             result = self.store.open_screenshots_folder()
-        startfile.assert_called_once_with(str(self.root / "screenshots"))
+        popen.assert_called_once()
+        self.assertEqual(popen.call_args.args[0], ["explorer.exe", str(self.root / "screenshots")])
         self.assertTrue(result["opened"])
+        self.assertTrue(result["explorerStarted"])
 
 
 if __name__ == "__main__":

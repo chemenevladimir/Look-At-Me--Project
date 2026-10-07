@@ -55,6 +55,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ flushed: true, updates: engine.getActiveDirectionProgress() });
     return false;
   }
+  if (message.type === 'engine-freeze') {
+    engine.freezeInference();
+    sendResponse({ frozen: true });
+    return false;
+  }
   if (message.type === 'compose-evidence') {
     const pageFrame = message.pageFrame as CameraEvidenceFrame | undefined;
     if (!pageFrame?.data || pageFrame.mimeType !== 'image/png') {

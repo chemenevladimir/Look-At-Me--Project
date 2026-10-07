@@ -331,6 +331,13 @@ Phase 30C. In-tab MV3 Session Architecture [~]
 - [~] Google Forms rules покрыты unit-тестами, но live submit реальной формы ещё не выполнен;
 - [x] finishing the integration session stopped the camera/browser route and returned the local agent to `stopped` without leaving monitoring active.
 
+Проверка pipeline (2026-10-08):
+
+- [x] permanent Shadow DOM overlay shows frames from the existing offscreen camera stream; no second `getUserMedia` pipeline was added;
+- [x] overlay Finish action was exercised in Chrome for Testing: session reached `COMPLETED`, camera/CV stopped, overlay disappeared and fullscreen exit added no violation;
+- [x] post-finish browser event was rejected and Activity Score remained unchanged;
+- [x] screenshot capture revalidates and activates the monitored tab/window on every retry, removing the stale stored-window race.
+
 ---
 
 BLOCK 7. EVIDENCE AND TIMELINE [~]
@@ -365,6 +372,13 @@ Phase 34. Evidence Viewer [~]
 - [x] readable local SQLite page with violation time, type, session and screenshot filename;
 - confidence;
 - duration.
+
+Проверка evidence pipeline (2026-10-08):
+
+- [x] runtime smoke produced composite violation PNG files and `final001.png`, then read the matching rows through helper → SQLite → Web Viewer;
+- [x] Web Viewer loads the existing `Documents\LookAtMe\database.db` immediately and refreshes again after helper reconnection;
+- [x] `Доказательства` sent the existing Native Messaging command, helper launched dynamic `Documents\LookAtMe\screenshots` in Explorer and returned explicit success;
+- [x] installed helper protocol test and local store tests passed; current local database was read with existing sessions/events preserved.
 
 Phase 35. Evidence Management [~]
 

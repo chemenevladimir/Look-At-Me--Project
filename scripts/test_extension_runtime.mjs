@@ -333,6 +333,10 @@ try {
     'in-tab status overlay',
   );
   if (!/look at me/i.test(overlayText)) throw new Error(`Unexpected overlay content: ${overlayText}`);
+  const overlayCameraVisible = await waitFor(
+    () => evaluate(client, pageSession, `document.getElementById('look-at-me-proctoring-overlay')?.shadowRoot?.querySelector('.preview img')?.src?.startsWith('data:image/png;base64,') || false`),
+    'in-tab live camera preview',
+  );
   if (activeState.fullscreenStatus !== 'ACTIVE') {
     throw new Error(`Chrome window did not enter fullscreen: ${activeState.fullscreenStatus}`);
   }
@@ -400,6 +404,13 @@ try {
   if (fullscreenEventsAfterFinish !== fullscreenEventsBeforeFinish) {
     throw new Error('Normal Finish Test flow created a false FULLSCREEN_EXIT event.');
   }
+  const completedScore = stopped.activityScore;
+  await evaluate(client, pageSession, `document.dispatchEvent(new Event('copy', {bubbles:true}))`);
+  await delay(700);
+  const afterFinish = await evaluateWorker('chrome.storage.local.get("look-at-me.session").then((value) => value["look-at-me.session"])');
+  if (afterFinish.activityScore !== completedScore) throw new Error('Activity Score changed after session completion.');
+  const overlayRemoved = await evaluate(client, pageSession, `!document.getElementById('look-at-me-proctoring-overlay')`);
+  if (!overlayRemoved) throw new Error('The in-page overlay remained after session completion.');
 
   const screenshotsDirectory = join(evidenceRoot, 'screenshots');
   console.error('[runtime-smoke] verifying local database and PNG files');
@@ -444,6 +455,11 @@ try {
   if (!firstViewerScreenshot || !screenshots.includes(firstViewerScreenshot)) {
     throw new Error(`Evidence viewer did not show a saved screenshot: ${JSON.stringify(viewerRows)}`);
   }
+  await evaluate(client, evidenceSession, `document.querySelector('button.folder')?.click()`);
+  await waitFor(
+    () => evaluate(client, evidenceSession, `!document.querySelector('button.folder')?.textContent?.includes('Открытие') && !document.querySelector('.error')`),
+    'evidence screenshots folder command',
+  );
   if (process.env.LOOK_AT_ME_VIEWER_SCREENSHOT) {
     const screenshotPath = resolve(process.env.LOOK_AT_ME_VIEWER_SCREENSHOT);
     await mkdir(dirname(screenshotPath), { recursive: true });
@@ -473,6 +489,7 @@ try {
     faceStatus: activeState.faceStatus,
     localAgentStateObserved: activeState.localAgentState,
     overlayVisible: /look at me/i.test(overlayText),
+    overlayCameraVisible,
     popupCameraVisible,
     overlayFinishVerified: overlayFinishVisible,
     fullscreenStatus: activeState.fullscreenStatus,
@@ -485,6 +502,9 @@ try {
     evidenceDeleteVerified: true,
     finalScreenshot: finalScreenshots[0],
     gracefulFullscreenExitVerified: fullscreenEventsAfterFinish === fullscreenEventsBeforeFinish,
+    scoreFrozenAfterFinish: afterFinish.activityScore === completedScore,
+    overlayRemovedAfterFinish: overlayRemoved,
+    screenshotsFolderOpenVerified: true,
     helperRecoveryVerified,
     screenshotsAfterDelete: screenshotsAfterDelete.length,
     screenshotsDirectory,

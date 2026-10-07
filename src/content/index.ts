@@ -15,6 +15,12 @@ const FORM_REPORTED_KEY = 'look-at-me.google-form-submission-reported';
 let state: ExtensionSessionState | null = null;
 let expectedFullscreen = false;
 let confirmationTimer: number | null = null;
+let previewTimer: number | null = null;
+let previewDataUrl = '';
+
+const isCollecting = (): boolean => state?.status === 'PROCTORING_STARTING'
+  || state?.status === 'PROCTORING_ACTIVE'
+  || state?.status === 'PROCTORING_PAUSED';
 
 const send = (message: unknown): void => {
   void chrome.runtime.sendMessage(message).catch(() => {
@@ -27,7 +33,7 @@ const emitPageEvent = (
   explanation: string,
   metadata?: Record<string, string | number | boolean>,
 ): void => {
-  if (!state || !isSessionRunning(state.status)) return;
+  if (!state || !isCollecting()) return;
   send({
     type: 'page-security-event',
     eventType,
@@ -54,7 +60,7 @@ const renderOverlay = (): void => {
   const host = existing ?? document.createElement('div');
   host.id = OVERLAY_HOST_ID;
   if (!existing) {
-    host.style.cssText = 'all:initial;position:fixed;top:16px;right:16px;z-index:2147483647;pointer-events:none;';
+    host.style.cssText = 'all:initial;position:fixed;top:16px;right:16px;z-index:2147483647;pointer-events:auto;';
     document.documentElement.append(host);
   }
   const root = host.shadowRoot ?? host.attachShadow({ mode: 'open' });
@@ -67,6 +73,9 @@ const renderOverlay = (): void => {
         padding: 14px; font: 600 12px/1.35 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         backdrop-filter: blur(12px); }
       .top { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; }
+      .preview { position:relative; overflow:hidden; height:104px; margin-bottom:11px; border-radius:11px; background:#020617; }
+      .preview img { width:100%; height:100%; object-fit:cover; transform:scaleX(-1); display:${previewDataUrl ? 'block' : 'none'}; }
+      .preview span { position:absolute; left:8px; bottom:7px; padding:4px 6px; border-radius:999px; color:#d1fae5; background:rgba(2,6,23,.75); font-size:9px; }
       .status { display:flex; align-items:center; gap:7px; font-size:11px; letter-spacing:.08em; color:${active ? '#6ee7b7' : '#fcd34d'}; }
       .dot { width:8px; height:8px; border-radius:50%; background:currentColor; box-shadow:0 0 0 4px color-mix(in srgb,currentColor 15%,transparent); }
       .brand { color:#94a3b8; font-size:10px; letter-spacing:.08em; }
@@ -85,6 +94,7 @@ const renderOverlay = (): void => {
     </style>
     <section class="card" aria-label="Look At Me proctoring status">
       <div class="top"><div class="status"><i class="dot"></i>${active ? 'PROCTORING ACTIVE' : state.status.replace('PROCTORING_', '')}</div><div class="brand">LOOK AT ME!</div></div>
+      <div class="preview"><img alt="Live camera preview" src="${previewDataUrl}"><span>● LIVE CAMERA</span></div>
       <div class="score"><span>Activity Score</span><strong>${state.activityScore}<small style="font-size:11px;color:#64748b"> / 200</small></strong></div>
       <div class="grid">
         <div class="metric"><label>EVENTS</label><b>${state.eventCount}</b></div>
@@ -116,6 +126,33 @@ const renderOverlay = (): void => {
       finishButton.textContent = 'Завершить тест';
     });
   });
+};
+
+const updateCameraPreview = async (): Promise<void> => {
+  if (!state || !isSessionRunning(state.status)) return;
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'overlay-camera-preview' }) as {
+      available?: boolean; frame?: { data?: string; mimeType?: string };
+    };
+    if (response.available && response.frame?.data && response.frame.mimeType === 'image/png') {
+      previewDataUrl = `data:image/png;base64,${response.frame.data}`;
+      const image = document.getElementById(OVERLAY_HOST_ID)?.shadowRoot?.querySelector<HTMLImageElement>('.preview img');
+      if (image) { image.src = previewDataUrl; image.style.display = 'block'; }
+    }
+  } catch { /* State updates retry the existing offscreen camera pipeline. */ }
+};
+
+const syncPreviewTimer = (): void => {
+  if (state && isSessionRunning(state.status)) {
+    if (previewTimer === null) {
+      void updateCameraPreview();
+      previewTimer = window.setInterval(() => { void updateCameraPreview(); }, 650);
+    }
+  } else if (previewTimer !== null) {
+    window.clearInterval(previewTimer);
+    previewTimer = null;
+    previewDataUrl = '';
+  }
 };
 
 const readIntent = (): GoogleFormsIntent | null => {
@@ -196,6 +233,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   state = message.state as ExtensionSessionState;
   if (state && isSessionRunning(state.status)) expectedFullscreen ||= Boolean(document.fullscreenElement);
   renderOverlay();
+  syncPreviewTimer();
   scheduleConfirmationCheck();
   return false;
 });
@@ -204,8 +242,10 @@ void chrome.runtime.sendMessage({ type: 'content-ready', url: location.href }).t
   state = response?.state ?? null;
   expectedFullscreen = Boolean(state && isSessionRunning(state.status) && document.fullscreenElement);
   renderOverlay();
+  syncPreviewTimer();
   scheduleConfirmationCheck();
 }).catch(() => {
   state = null;
   renderOverlay();
+  syncPreviewTimer();
 });
