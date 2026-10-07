@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Camera, CircleAlert, Eye, Square, Play, Activity, Database, Table2, WifiOff } from 'lucide-react';
 import { createIdleSessionState, isSessionRunning, type ExtensionSessionState } from '../extension/sessionState';
 import type { ProctorEvent } from '../types';
+import { readCameraPermissionState } from './cameraPermission';
 import './popup.css';
 
 type CommandResponse = { state?: ExtensionSessionState; events?: ProctorEvent[]; error?: string };
@@ -113,6 +114,17 @@ export default function PopupApp() {
     setBusy(true);
     setLocalError('');
     try {
+      const cameraPermission = await readCameraPermissionState();
+      if (cameraPermission !== 'granted') {
+        const permissionResponse = await sendCommand('popup-open-camera-permission', {
+          studentName: studentName.trim() || 'Student',
+          testName: testName.trim() || undefined,
+        }) as CommandResponse & { opened?: boolean };
+        if (permissionResponse.error) throw new Error(permissionResponse.error);
+        if (!permissionResponse.opened) throw new Error('Chrome could not open the camera permission page.');
+        window.close();
+        return;
+      }
       const response = await sendCommand('popup-start', {
         studentName: studentName.trim() || 'Student',
         testName: testName.trim() || undefined,

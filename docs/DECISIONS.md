@@ -30,6 +30,12 @@
 
 **Reason:** A toolbar popup is destroyed when it loses focus. Making it a disposable client prevents popup closure from stopping the camera or session, avoids opening a separate application window, and lets monitoring survive same-tab navigation. An explicit confirmed stop or verified Google Forms completion owns finalization.
 
+## ADR-012: Bootstrap camera permission from the Start gesture
+
+**Decision:** The Start button checks the extension-origin camera permission. On a fresh profile it opens a bundled one-purpose extension permission page; its explicit button calls `getUserMedia()` and immediately stops that temporary stream. After Chrome grants access, the page tells the service worker to start the original test tab and the existing persistent camera/CV stream in the offscreen document. With an existing grant, Start skips the permission page.
+
+**Reason:** A fresh Chrome profile has no stored camera grant for the unpacked extension origin. A hidden MV3 offscreen document has no transferable user activation and can receive `NotAllowedError` when it tries to initiate the first permission prompt. Chrome also destroys an action popup when a permission prompt takes focus, so the asynchronous Start continuation cannot safely live there. The visible permission page persists through the prompt; it is only a one-time bootstrap and does not own the active session, persistent camera stream, or inference.
+
 ## ADR-005: Bundle ONNX Runtime Web assets and use WebGPU with WASM fallback
 
 **Decision:** Import `onnxruntime-web/webgpu`, request WebGPU first, retry with WASM when necessary, and ship all required ORT `.mjs`/`.wasm` binaries inside the extension.

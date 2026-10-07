@@ -1,0 +1,11 @@
+import{c as s}from"./createLucideIcon-Dd9PWum2.js";/**
+ * @license lucide-react v0.453.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const m=s("Camera",[["path",{d:"M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z",key:"1tc9qg"}],["circle",{cx:"12",cy:"13",r:"3",key:"1vg3eu"}]]);/**
+ * @license lucide-react v0.453.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const d=s("CircleAlert",[["circle",{cx:"12",cy:"12",r:"10",key:"1mglay"}],["line",{x1:"12",x2:"12",y1:"8",y2:"12",key:"1pkeuh"}],["line",{x1:"12",x2:"12.01",y1:"16",y2:"16",key:"4dfq90"}]]),o=async()=>{var e;if(!((e=navigator.permissions)!=null&&e.query))return"unsupported";try{return(await navigator.permissions.query({name:"camera"})).state}catch{return"unknown"}},c=async()=>{var e;if(!((e=navigator.mediaDevices)!=null&&e.enumerateDevices))return"unknown";try{return(await navigator.mediaDevices.enumerateDevices()).filter(a=>a.kind==="videoinput").length}catch{return"unknown"}},n=async()=>{var e;return{context:"visible-extension-page",origin:location.origin,secureContext:window.isSecureContext,userActivationActive:((e=navigator.userActivation)==null?void 0:e.isActive)??!1,permissionState:await o(),videoInputCount:await c()}},v=async()=>{var e;if(!((e=navigator.mediaDevices)!=null&&e.getUserMedia))throw new Error("Camera API is unavailable in the visible extension permission page.");try{(await navigator.mediaDevices.getUserMedia({video:{width:{ideal:960},height:{ideal:540},facingMode:"user"},audio:!1})).getTracks().forEach(t=>t.stop());const a=await n();return console.info("[Look At Me] Camera permission bootstrap succeeded.",a),a}catch(i){const a=await n(),t=i instanceof DOMException||i instanceof Error?i.name:"UnknownError",r=i instanceof Error?i.message:String(i);throw console.error("[Look At Me] Camera permission bootstrap failed.",{name:t,message:r,...a,cause:i}),new Error(`Camera access failed in visible extension permission page: ${t}: ${r||"No browser error message."} (permission=${a.permissionState}, videoInputs=${a.videoInputCount}, secureContext=${a.secureContext}, userActivation=${a.userActivationActive}).`)}};export{m as C,d as a,v as e,o as r};

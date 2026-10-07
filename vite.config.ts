@@ -20,6 +20,7 @@ export default defineConfig({
         popup: resolve(__dirname, 'popup.html'),
         offscreen: resolve(__dirname, 'offscreen.html'),
         evidence: resolve(__dirname, 'evidence.html'),
+        cameraPermission: resolve(__dirname, 'camera-permission.html'),
       },
       output: {
         entryFileNames: 'assets/[name].js',

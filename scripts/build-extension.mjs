@@ -19,7 +19,7 @@ if (!existsSync(srcManifest)) {
 mkdirSync(distDir, { recursive: true });
 copyFileSync(srcManifest, join(distDir, 'manifest.json'));
 
-for (const page of ['popup.html', 'offscreen.html', 'evidence.html']) {
+for (const page of ['popup.html', 'offscreen.html', 'evidence.html', 'camera-permission.html']) {
   if (!existsSync(join(distDir, page))) {
     throw new Error(`Vite did not generate ${page}`);
   }

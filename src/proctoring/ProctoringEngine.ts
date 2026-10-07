@@ -66,15 +66,25 @@ const createTrackers = () => ({
   }),
 });
 
-const describeCameraError = (error: unknown): string => {
+const describeCameraError = (error: unknown, permissionState: string): string => {
   const name = error instanceof Error ? error.name : 'UnknownError';
+  const detail = error instanceof Error && error.message ? error.message : 'No browser error message.';
   if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
-    return 'Camera permission was denied. Allow camera access for Look At Me! and retry.';
+    return `Camera access failed in offscreen extension context: ${name}: ${detail} (permission=${permissionState}). Reopen the extension popup and start the test from its button so Chrome can request camera permission.`;
   }
-  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') return 'No camera was found.';
-  if (name === 'NotReadableError' || name === 'TrackStartError') return 'The camera is busy or unavailable.';
-  if (name === 'OverconstrainedError') return 'The camera does not support the requested video settings.';
-  return `Camera could not start: ${error instanceof Error ? error.message : String(error)}`;
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') return `No camera was found: ${name}: ${detail}`;
+  if (name === 'NotReadableError' || name === 'TrackStartError') return `The camera is busy or unavailable: ${name}: ${detail}`;
+  if (name === 'OverconstrainedError') return `The camera does not support the requested video settings: ${name}: ${detail}`;
+  return `Camera could not start in offscreen extension context: ${name}: ${detail} (permission=${permissionState}).`;
+};
+
+const cameraPermissionState = async (): Promise<string> => {
+  if (!navigator.permissions?.query) return 'unsupported';
+  try {
+    return (await navigator.permissions.query({ name: 'camera' as PermissionName })).state;
+  } catch {
+    return 'unknown';
+  }
 };
 
 const formatDuration = (duration: number): string => `${(duration / 1_000).toFixed(1)} s`;
@@ -169,6 +179,13 @@ export class ProctoringEngine {
     }
 
     try {
+      const permissionBeforeRequest = await cameraPermissionState();
+      console.info('[Look At Me] Requesting camera stream.', {
+        context: 'offscreen-extension-page',
+        origin: location.origin,
+        secureContext: window.isSecureContext,
+        permissionState: permissionBeforeRequest,
+      });
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 960 }, height: { ideal: 540 }, facingMode: 'user' },
         audio: false,
@@ -181,7 +198,17 @@ export class ProctoringEngine {
       await this.video.play();
       this.callbacks.updateStatus({ cameraStatus: 'ON', proctoringStatus: 'Camera is on. Loading MediaPipe and YOLO…' });
     } catch (error) {
-      await this.failStart(describeCameraError(error));
+      const permissionState = await cameraPermissionState();
+      console.error('[Look At Me] Camera stream request failed.', {
+        context: 'offscreen-extension-page',
+        origin: location.origin,
+        secureContext: window.isSecureContext,
+        permissionState,
+        name: error instanceof Error ? error.name : 'UnknownError',
+        message: error instanceof Error ? error.message : String(error),
+        error,
+      });
+      await this.failStart(describeCameraError(error, permissionState));
       this.startingSessionId = null;
       return;
     }

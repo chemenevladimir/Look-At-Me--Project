@@ -788,14 +788,16 @@
     } catch {
     }
   }
-  async function startSession(options) {
+  async function startSession(options, requestedTabId) {
     await ensureLoaded();
     if (isSessionRunning(session.status)) return session;
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = requestedTabId === void 0 ? (await chrome.tabs.query({ active: true, currentWindow: true }))[0] : await chrome.tabs.get(requestedTabId);
     if (tab.id === void 0 || !isMonitorableUrl(tab.url)) {
       throw new Error("Open an ordinary http:// or https:// page before starting proctoring. Chrome system pages are not accessible.");
     }
     const browserWindow = await chrome.windows.get(tab.windowId);
+    await chrome.windows.update(tab.windowId, { focused: true });
+    await chrome.tabs.update(tab.id, { active: true });
     engine.clear();
     events = [];
     sessionFailures = [];
@@ -1046,6 +1048,8 @@
     if (value.target === "offscreen") return false;
     const fromOffscreen = sender.url === chrome.runtime.getURL(OFFSCREEN_URL);
     const fromEvidencePage = sender.url === chrome.runtime.getURL("evidence.html");
+    const cameraPermissionUrl = chrome.runtime.getURL("camera-permission.html");
+    const fromCameraPermissionPage = sender.url === cameraPermissionUrl || sender.url?.startsWith(`${cameraPermissionUrl}?`) === true;
     void enqueue(async () => {
       await ensureLoaded();
       if (value.type === "popup-get-state") return { state: session };
@@ -1057,6 +1061,35 @@
             testName: safeText(value.testName, 240)
           })
         };
+      }
+      if (value.type === "popup-open-camera-permission") {
+        const [targetTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (targetTab.id === void 0 || !isMonitorableUrl(targetTab.url)) {
+          return { error: "Open an ordinary http:// or https:// page before requesting camera access." };
+        }
+        const params = new URLSearchParams({
+          targetTabId: String(targetTab.id),
+          studentName: safeText(value.studentName, 200)?.trim() || "Student",
+          testName: safeText(value.testName, 240)?.trim() || new URL(targetTab.url).hostname
+        });
+        await chrome.tabs.create({ url: chrome.runtime.getURL(`camera-permission.html?${params}`), active: true });
+        return { opened: true };
+      }
+      if (value.type === "camera-permission-start") {
+        if (!fromCameraPermissionPage || value.confirmed !== true) return { error: "Untrusted camera permission request." };
+        const targetTabId = Number(value.targetTabId);
+        if (!Number.isInteger(targetTabId) || targetTabId < 0) return { error: "The original test tab is unavailable." };
+        const result = await startSession({
+          studentName: safeText(value.studentName, 200),
+          testName: safeText(value.testName, 240)
+        }, targetTabId);
+        if (result.status === "PROCTORING_ACTIVE" || result.status === "PROCTORING_STARTING") {
+          const permissionTabId = sender.tab?.id;
+          if (permissionTabId !== void 0) setTimeout(() => {
+            void chrome.tabs.remove(permissionTabId);
+          }, 250);
+        }
+        return { state: result };
       }
       if (value.type === "popup-stop") {
         if (value.confirmed !== true) {

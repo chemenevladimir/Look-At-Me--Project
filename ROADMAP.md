@@ -337,6 +337,7 @@ Phase 30C. In-tab MV3 Session Architecture [~]
 - [x] overlay Finish action was exercised in Chrome for Testing: session reached `COMPLETED`, camera/CV stopped, overlay disappeared and fullscreen exit added no violation;
 - [x] post-finish browser event was rejected and Activity Score remained unchanged;
 - [x] screenshot capture revalidates and activates the monitored tab/window on every retry, removing the stale stored-window race.
+- [x] fresh-profile camera permission is bootstrapped in a bundled visible permission page before the persistent offscreen camera/CV stream starts; an existing grant skips it, and raw error name/message/context diagnostics are retained.
 
 ---
 

@@ -305,8 +305,30 @@ try {
     const label = await evaluate(client, popup.sessionId, 'document.querySelector("button.primary-action")?.textContent || ""');
     return /Начать тест/i.test(label) ? true : null;
   }, 'popup ready state', 15_000);
+  await evaluate(client, popup.sessionId, `(() => {
+    const original = navigator.permissions.query.bind(navigator.permissions);
+    navigator.permissions.query = (descriptor) => descriptor?.name === 'camera'
+      ? Promise.resolve({state:'prompt'})
+      : original(descriptor);
+  })()`);
   await clickPrimary(client, popup.sessionId);
   console.error('[runtime-smoke] start clicked');
+
+  let cameraPermissionPageUsed = false;
+  try {
+    const permissionTarget = await waitFor(async () => {
+      const { targetInfos } = await client.send('Target.getTargets');
+      return targetInfos.find((item) => item.url.startsWith(`chrome-extension://${extensionId}/camera-permission.html`));
+    }, 'camera permission page', 5_000);
+    const permissionSession = await attach(client, permissionTarget.targetId);
+    await waitFor(() => evaluate(client, permissionSession, 'document.querySelector("button") && document.readyState === "complete"'), 'camera permission action');
+    await evaluate(client, permissionSession, 'document.querySelector("button").click()');
+    cameraPermissionPageUsed = true;
+    console.error('[runtime-smoke] first-run camera permission confirmed');
+  } catch {
+    // A persisted grant legitimately skips the one-time permission page.
+  }
+  if (!cameraPermissionPageUsed) throw new Error('Fresh-profile camera permission page was not used.');
 
   let activeState;
   try {
@@ -344,6 +366,12 @@ try {
   await delay(1_000);
 
   popup = await openPopupPage();
+  const popupCameraPermissionBootstrapped = await evaluate(
+    client,
+    popup.sessionId,
+    `navigator.permissions.query({name:'camera'}).then((permission) => permission.state === 'granted')`,
+  );
+  if (!popupCameraPermissionBootstrapped) throw new Error('Extension camera permission was not granted before offscreen CV started.');
   await client.send('Target.activateTarget', { targetId: pageTargetId });
   const restored = await evaluateWorker('chrome.storage.local.get("look-at-me.session")');
   if (restored?.['look-at-me.session']?.sessionId !== sessionId || restored?.['look-at-me.session']?.status !== 'PROCTORING_ACTIVE') {
@@ -491,6 +519,8 @@ try {
     overlayVisible: /look at me/i.test(overlayText),
     overlayCameraVisible,
     popupCameraVisible,
+    popupCameraPermissionBootstrapped,
+    cameraPermissionPageUsed,
     overlayFinishVerified: overlayFinishVisible,
     fullscreenStatus: activeState.fullscreenStatus,
     popupReopenPreservedSession: true,
